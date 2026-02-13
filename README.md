@@ -22,6 +22,11 @@ IFF enables users to search and discover aircraft details through conversational
 - **Prompt Optimization**: DSPy
 - **Architecture**: Visual function blocks
 
+## Notes
+
+- Create notes on React internals for later use
+- See the [langextract library](https://developers.googleblog.com/en/introducing-langextract-a-gemini-powered-information-extraction-library/)
+
 ## Planned Platforms
 
 - Web application
@@ -34,5 +39,6 @@ IFF enables users to search and discover aircraft details through conversational
 2. Natural language to search query translation
 3. Integration testing and iteration
 4. DSPy pipeline for prompt optimization
-5. Benchmarking with optimized prompts
-6. Web and mobile app development
+5. Apply optimized prompts (if applicable) and perform benchmarking
+6. Build the IFF web app and integrate with the API, then iterate
+7. Build the IFF mobile app
