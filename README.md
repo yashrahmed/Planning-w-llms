@@ -1,44 +1,44 @@
-# IFF - [Identification Friend or Foe](https://en.wikipedia.org/wiki/Identification_friend_or_foe)
+# Planning with LLMs (TypeScript + Bun + Fastify)
 
-An LLM-powered search engine for querying aircraft information using natural language.
+This project explores frame-grounded hierarchical planning for end-to-end camping logistics using TypeScript.
 
-## Overview
+## Stack
 
-IFF enables users to search and discover aircraft details through conversational queries. The system leverages large language models to understand natural language inputs and performs intelligent, multi-step searches to find and synthesize relevant information.
+- Runtime and package manager: `Bun`
+- Server framework: `Fastify`
+- Language: `TypeScript`
 
-## Key Features
+## Database note
 
-- **Natural Language Queries**: Search using conversational language with full conversation context
-- **Agentic Search**: Automatically performs multiple searches to comprehensively answer complex queries
-- **Information Synthesis**: Combines data from multiple sources into coherent responses
-- **Rich Output Formats**: Presents results as tables, graphs, timelines, and other visual formats where appropriate
-- **Hybrid Search**: Combines embedding similarity and semantic parsing for accurate results
-- **Visual Function Blocks**: Built on a modular, visual programming paradigm
+Use `Prisma` for DB connectivity when the persistence layer is added, but Prisma is intentionally **not installed** yet.
 
-## Technology Stack
+## Quick start
 
-- **Search Engine**: Typesense or SQLite
-- **Vector Store**: TBD
-- **Prompt Optimization**: DSPy
-- **Architecture**: Visual function blocks
+1. Install dependencies:
+   - `bun install`
+2. Run dev server:
+   - `bun run dev`
+3. Health check:
+   - `GET http://localhost:3000/health`
 
-## Notes
+## Goal
 
-- Create notes on React internals for later use
-- See the [langextract library](https://developers.googleblog.com/en/introducing-langextract-a-gemini-powered-information-extraction-library/)
+Build an LLM-driven planner that can handle all core trip constraints:
 
-## Planned Platforms
+1. Ingredients required for food preparation.
+2. Driving to and from the campsite.
+3. Residence addresses of people.
+4. Breaks during the drive.
+5. Car charging for EVs.
+6. Recreational activities at the campsite.
 
-- Web application
-- Mobile application
-- ChatGPT app integration
+## Architecture direction
 
-## Development Roadmap
+Use a frame-grounded hierarchy:
 
-1. Prototype search system with structured queries
-2. Natural language to search query translation
-3. Integration testing and iteration
-4. DSPy pipeline for prompt optimization
-5. Apply optimized prompts (if applicable) and perform benchmarking
-6. Build the IFF web app and integrate with the API, then iterate
-7. Build the IFF mobile app
+1. Natural language intent.
+2. Abstract concept frames.
+3. Grounded frames from external knowledge bases.
+4. Executable timeline plus simulation checks.
+
+Reference summary: [Frame-Grounded-Hierarchical-Planning-Summary.docx](./Frame-Grounded-Hierarchical-Planning-Summary.docx)

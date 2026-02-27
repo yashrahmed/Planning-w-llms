@@ -3,6 +3,14 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Node / Bun
+node_modules/
+dist/
+.turbo/
+.next/
+.bun/
+bun.lockb
+
 # C extensions
 *.so
 
