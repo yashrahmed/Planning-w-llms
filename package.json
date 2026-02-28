@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/server.ts",
-    "start": "bun src/server.ts",
+    "check": "tsc --noEmit",
+    "start": "bun run check && bun src/hello.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
