@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Campsite Cooking in Rain (Three.js + Rapier)</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0f1720;
+        color: #f3f4f6;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+      }
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.58);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        line-height: 1.45;
+        font-size: 13px;
+        white-space: pre-line;
+      }
+      #rain-toggle {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        padding: 8px 16px;
+        background: rgba(0, 0, 0, 0.58);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        color: #f3f4f6;
+        font-family: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      #rain-toggle:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">Initializing...</div>
+    <button id="rain-toggle">Rain: ON</button>
+    <script type="module">
+      import * as THREE from "https://unpkg.com/three@0.179.1/build/three.module.js";
+
+      const RAPIER = await import(
+        "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/+esm"
+      );
+      await RAPIER.init();
+
+      const hud = document.getElementById("hud");
+
+      // -- Scene setup --
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x5f768e);
+
+      const camera = new THREE.PerspectiveCamera(
+        58, window.innerWidth / window.innerHeight, 0.1, 1000
+      );
+      camera.position.set(7.5, 5.2, 8.5);
+      camera.lookAt(0, 1.2, 0);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      scene.add(new THREE.HemisphereLight(0xdbeafe, 0x1f2937, 1.1));
+      const dirLight = new THREE.DirectionalLight(0xf8fafc, 1);
+      dirLight.position.set(8, 14, 6);
+      scene.add(dirLight);
+
+      // -- Ground --
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 80),
+        new THREE.MeshStandardMaterial({ color: 0x355e3b, roughness: 1.0 })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+
+      // -- Physics world --
+      const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+
+      // ground collider (thin box at y=0)
+      const groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+      world.createCollider(
+        RAPIER.ColliderDesc.cuboid(40, 0.01, 40).setTranslation(0, 0, 0),
+        groundBody
+      );
+
+      // -- Table --
+      const tableGroup = new THREE.Group();
+      const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4f38, roughness: 0.85, metalness: 0.02 });
+
+      // tabletop
+      const tabletop = new THREE.Mesh(new THREE.BoxGeometry(6, 0.2, 3), woodMat);
+      tabletop.position.set(0, 1.0, 0);
+      tableGroup.add(tabletop);
+
+      // legs (4 corners, inset slightly from edges)
+      const legGeo = new THREE.BoxGeometry(0.15, 0.9, 0.15);
+      const legPositions = [
+        [-2.7, 0.45, -1.2],
+        [ 2.7, 0.45, -1.2],
+        [-2.7, 0.45,  1.2],
+        [ 2.7, 0.45,  1.2],
+      ];
+      for (const [lx, ly, lz] of legPositions) {
+        const leg = new THREE.Mesh(legGeo, woodMat);
+        leg.position.set(lx, ly, lz);
+        tableGroup.add(leg);
+      }
+      scene.add(tableGroup);
+
+      // physics: tabletop + 4 leg colliders on one fixed body
+      const tableBody = world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0)
+      );
+      world.createCollider(
+        RAPIER.ColliderDesc.cuboid(3, 0.1, 1.5).setTranslation(0, 1.0, 0),
+        tableBody
+      );
+      for (const [lx, ly, lz] of legPositions) {
+        world.createCollider(
+          RAPIER.ColliderDesc.cuboid(0.075, 0.45, 0.075).setTranslation(lx, ly, lz),
+          tableBody
+        );
+      }
+
+      // -- Stove --
+      const stoveMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 0.32, 1.0),
+        new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.5, metalness: 0.35 })
+      );
+      stoveMesh.position.set(0, 1.28, 0);
+      scene.add(stoveMesh);
+
+      const stoveBody = world.createRigidBody(
+        RAPIER.RigidBodyDesc.dynamic()
+          .setTranslation(0, 1.28, 0)
+          .setLinearDamping(2)
+          .setAngularDamping(2)
+      );
+      world.createCollider(
+        RAPIER.ColliderDesc.cuboid(0.6, 0.16, 0.5).setFriction(0.7),
+        stoveBody
+      );
+
+      // -- Camper (humanoid, standing beside table facing +X) --
+      const camperX = -4.5, camperZ = 0;
+      const camperGroup = new THREE.Group();
+      camperGroup.position.set(camperX, 0, camperZ);
+
+      const skinMat = new THREE.MeshStandardMaterial({ color: 0xf0c8a0, roughness: 0.7 });
+      const shirtMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.85 });
+      const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1e3a5f, roughness: 0.8 });
+      const bootMat = new THREE.MeshStandardMaterial({ color: 0x3b2716, roughness: 0.9 });
+
+      // head
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), skinMat);
+      head.position.y = 1.75;
+      camperGroup.add(head);
+
+      // torso
+      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.3), shirtMat);
+      torso.position.y = 1.35;
+      camperGroup.add(torso);
+
+      // arms
+      const armGeo = new THREE.BoxGeometry(0.15, 0.55, 0.15);
+      const leftArm = new THREE.Mesh(armGeo, shirtMat);
+      leftArm.position.set(-0.33, 1.35, 0);
+      camperGroup.add(leftArm);
+      const rightArm = new THREE.Mesh(armGeo, skinMat);
+      rightArm.position.set(0.33, 1.35, 0);
+      camperGroup.add(rightArm);
+
+      // legs
+      const legHGeo = new THREE.BoxGeometry(0.18, 0.5, 0.18);
+      const leftLeg = new THREE.Mesh(legHGeo, pantsMat);
+      leftLeg.position.set(-0.13, 0.8, 0);
+      camperGroup.add(leftLeg);
+      const rightLeg = new THREE.Mesh(legHGeo, pantsMat);
+      rightLeg.position.set(0.13, 0.8, 0);
+      camperGroup.add(rightLeg);
+
+      // boots
+      const bootGeo = new THREE.BoxGeometry(0.2, 0.2, 0.28);
+      const leftBoot = new THREE.Mesh(bootGeo, bootMat);
+      leftBoot.position.set(-0.13, 0.45, 0.04);
+      camperGroup.add(leftBoot);
+      const rightBoot = new THREE.Mesh(bootGeo, bootMat);
+      rightBoot.position.set(0.13, 0.45, 0.04);
+      camperGroup.add(rightBoot);
+
+      scene.add(camperGroup);
+
+      // physics: single fixed capsule encompassing the humanoid
+      const camperBody = world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(camperX, 1.1, camperZ)
+      );
+      world.createCollider(RAPIER.ColliderDesc.capsule(0.55, 0.3), camperBody);
+
+      // -- Dry patch under table (lighter ground color) --
+      const dryPatch = new THREE.Mesh(
+        new THREE.PlaneGeometry(5.8, 2.8),
+        new THREE.MeshStandardMaterial({ color: 0x4a7a4a, roughness: 0.9 })
+      );
+      dryPatch.rotation.x = -Math.PI / 2;
+      dryPatch.position.set(0, 0.005, 0); // just above ground to avoid z-fight
+      scene.add(dryPatch);
+
+      // -- Wet ground around table (darker, glossy) --
+      const wetGround = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 80),
+        new THREE.MeshStandardMaterial({ color: 0x2a4a2a, roughness: 0.4, metalness: 0.1, transparent: true, opacity: 0.45 })
+      );
+      wetGround.rotation.x = -Math.PI / 2;
+      wetGround.position.y = 0.003;
+      scene.add(wetGround);
+
+      // -- Rain (raycast against all physics colliders) --
+      const rainCount = 2000;
+      const rainPositions = new Float32Array(rainCount * 3);
+      const rainVelocities = new Float32Array(rainCount);
+      for (let i = 0; i < rainCount; i++) {
+        rainPositions[i * 3]     = (Math.random() - 0.5) * 50;
+        rainPositions[i * 3 + 1] = Math.random() * 25 + 2;
+        rainPositions[i * 3 + 2] = (Math.random() - 0.5) * 50;
+        rainVelocities[i] = 0.3 + Math.random() * 0.25;
+      }
+      const rainGeo = new THREE.BufferGeometry();
+      rainGeo.setAttribute("position", new THREE.BufferAttribute(rainPositions, 3));
+      const rainMat = new THREE.PointsMaterial({
+        color: 0xaaccee,
+        size: 0.08,
+        transparent: true,
+        opacity: 0.6,
+      });
+      const rainMesh = new THREE.Points(rainGeo, rainMat);
+      scene.add(rainMesh);
+
+      const windX = 0.012;
+      const rayDir = { x: 0, y: -1, z: 0 };
+      let rainRespawn = true;
+
+      const toggleBtn = document.getElementById("rain-toggle");
+      toggleBtn.addEventListener("click", () => {
+        rainRespawn = !rainRespawn;
+        toggleBtn.textContent = rainRespawn ? "Rain: ON" : "Rain: OFF";
+        if (rainRespawn) {
+          const pos = rainGeo.attributes.position.array;
+          for (let i = 0; i < rainCount; i++) {
+            const i3 = i * 3;
+            pos[i3]     = (Math.random() - 0.5) * 50;
+            pos[i3 + 1] = Math.random() * 10 + 20;
+            pos[i3 + 2] = (Math.random() - 0.5) * 50;
+            rainVelocities[i] = 0.3 + Math.random() * 0.25;
+          }
+          rainGeo.attributes.position.needsUpdate = true;
+        }
+      });
+
+      function respawn(pos, i3) {
+        pos[i3]     = (Math.random() - 0.5) * 50;
+        pos[i3 + 1] = Math.random() * 10 + 20;
+        pos[i3 + 2] = (Math.random() - 0.5) * 50;
+      }
+
+      function stepRain() {
+        const pos = rainGeo.attributes.position.array;
+        for (let i = 0; i < rainCount; i++) {
+          const i3 = i * 3;
+          if (rainVelocities[i] === 0) continue; // stopped particle
+          pos[i3]     += windX;
+          pos[i3 + 1] -= rainVelocities[i];
+
+          const x = pos[i3], y = pos[i3 + 1], z = pos[i3 + 2];
+
+          // cast a short downward ray (length = fall speed) to detect colliders
+          const ray = new RAPIER.Ray({ x, y, z }, rayDir);
+          const hit = world.castRay(ray, rainVelocities[i], true);
+          if (hit !== null) {
+            if (rainRespawn) {
+              respawn(pos, i3);
+            } else {
+              // stop at hit point
+              const hitDist = hit.timeOfImpact;
+              pos[i3 + 1] = y - hitDist;
+              rainVelocities[i] = 0;
+            }
+            continue;
+          }
+
+          if (y < 0.05) {
+            if (rainRespawn) {
+              respawn(pos, i3);
+            } else {
+              pos[i3 + 1] = 0.05;
+              rainVelocities[i] = 0;
+            }
+          }
+        }
+        rainGeo.attributes.position.needsUpdate = true;
+      }
+
+      // -- Animate --
+      let ticks = 0;
+      const fixedDt = 1 / 60;
+
+      function animate() {
+        world.timestep = fixedDt;
+        world.step();
+        ticks++;
+
+        // sync dynamic bodies
+        const st = stoveBody.translation();
+        stoveMesh.position.set(st.x, st.y, st.z);
+
+        stepRain();
+
+        hud.textContent =
+          `Campsite Cooking (Three.js + Rapier)\n` +
+          `Ticks: ${ticks}\n` +
+          `Stove Y: ${st.y.toFixed(3)}\n` +
+          `Table: fixed | Camper: fixed | Stove: dynamic`;
+
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+
+      animate();
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
