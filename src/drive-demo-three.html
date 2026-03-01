@@ -35,158 +35,302 @@
     <div id="hud">Initializing...</div>
     <script type="module">
       import * as THREE from "https://unpkg.com/three@0.179.1/build/three.module.js";
+      import RAPIER from "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.19.3/+esm";
 
-      // Simulation config mirrors the drive demo assumptions.
-      const config = {
-        fromName: "Point A",
-        toName: "Point B",
-        distanceMiles: 30,
-        speedMph: 60,
-        fuelGallons: 1,
-        mpg: 20,
-        milesToWorldUnits: 0.5,
-        timeScale: 240, // 240x faster than real time (30 min trip plays in ~7.5s)
-      };
+      class DriveConfig {
+        constructor() {
+          this.fromName = "Point A";
+          this.toName = "Point B";
+          this.distanceMiles = 30;
+          this.speedMph = 60;
+          this.fuelGallons = 2;
+          this.mpg = 20;
+          this.milesToWorldUnits = 0.5;
+          this.timeScale = 240;
+          this.weather = "snowy";
+        }
 
-      const speedMilesPerSecond = config.speedMph / 3600;
-      const totalRangeMiles = config.fuelGallons * config.mpg;
-      const targetUnits = config.distanceMiles * config.milesToWorldUnits;
-      const maxUnitsByFuel = totalRangeMiles * config.milesToWorldUnits;
-
-      let fuelLeftGallons = config.fuelGallons;
-      let distanceTraveledMiles = 0;
-      let elapsedSeconds = 0;
-      let done = false;
-      let failed = false;
-
-      const hud = document.getElementById("hud");
-      if (!hud) throw new Error("HUD container missing.");
-
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x10151f);
-
-      const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
-      camera.position.set(0, 18, 36);
-      camera.lookAt(0, 0, 0);
-
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      document.body.appendChild(renderer.domElement);
-
-      const hemi = new THREE.HemisphereLight(0xffffff, 0x1f2937, 1.2);
-      scene.add(hemi);
-      const dir = new THREE.DirectionalLight(0xffffff, 1);
-      dir.position.set(10, 20, 8);
-      scene.add(dir);
-
-      const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(400, 120),
-        new THREE.MeshStandardMaterial({ color: 0x17202f, roughness: 0.98, metalness: 0.02 })
-      );
-      ground.rotation.x = -Math.PI / 2;
-      scene.add(ground);
-
-      const road = new THREE.Mesh(
-        new THREE.PlaneGeometry(targetUnits + 8, 6),
-        new THREE.MeshStandardMaterial({ color: 0x252a36, roughness: 1 })
-      );
-      road.rotation.x = -Math.PI / 2;
-      road.position.y = 0.01;
-      road.position.x = targetUnits / 2;
-      scene.add(road);
-
-      const lane = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(0, 0.02, 0),
-          new THREE.Vector3(targetUnits, 0.02, 0),
-        ]),
-        new THREE.LineBasicMaterial({ color: 0xf8fafc })
-      );
-      scene.add(lane);
-
-      const markerMaterial = new THREE.MeshStandardMaterial({ color: 0x60a5fa });
-      const startMarker = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 1.2, 16), markerMaterial);
-      startMarker.position.set(0, 0.6, -2.8);
-      scene.add(startMarker);
-
-      const endMarker = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 1.2, 16), markerMaterial);
-      endMarker.position.set(targetUnits, 0.6, -2.8);
-      scene.add(endMarker);
-
-      const car = new THREE.Mesh(
-        new THREE.BoxGeometry(2.2, 1.1, 1.2),
-        new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.6, metalness: 0.1 })
-      );
-      car.position.set(0, 0.65, 0);
-      scene.add(car);
-
-      const wheelGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.24, 18);
-      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0f172a });
-      const wheelOffsets = [
-        [0.75, 0.33, 0.55],
-        [0.75, 0.33, -0.55],
-        [-0.75, 0.33, 0.55],
-        [-0.75, 0.33, -0.55],
-      ];
-      for (const [x, y, z] of wheelOffsets) {
-        const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-        wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(x, y, z);
-        car.add(wheel);
+        get isSnowy() {
+          return this.weather === "snowy";
+        }
       }
 
-      const clock = new THREE.Clock();
+      class TerrainObject {
+        constructor(scene, config, targetUnits, world, targetMeters) {
+          this.rigidBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0));
+          this.collider = world.createCollider(
+            RAPIER.ColliderDesc.cuboid((targetMeters + 20) / 2, 0.5, 5).setFriction(config.isSnowy ? 0.2 : 0.7),
+            this.rigidBody
+          );
+          this.groundGeometry = new THREE.PlaneGeometry(400, 120);
+          this.groundMesh = new THREE.Mesh(
+            this.groundGeometry,
+            new THREE.MeshStandardMaterial({
+              color: config.isSnowy ? 0xe5ebf2 : 0x17202f,
+              roughness: config.isSnowy ? 0.9 : 0.98,
+              metalness: 0.02,
+            })
+          );
+          this.groundMesh.rotation.x = -Math.PI / 2;
+          scene.add(this.groundMesh);
 
-      function renderHud() {
-        const status = failed ? "FAIL (ran out of fuel)" : done ? "PASS" : "IN PROGRESS";
-        const ticks = Math.floor(elapsedSeconds * 60); // 60Hz equivalent
-        hud.textContent =
-          `Three.js Drive Demo\n` +
-          `${config.fromName} -> ${config.toName}\n` +
-          `Status: ${status}\n` +
-          `Ticks: ${ticks}\n` +
-          `Distance traveled: ${distanceTraveledMiles.toFixed(2)} / ${config.distanceMiles.toFixed(2)} miles\n` +
-          `Fuel left: ${fuelLeftGallons.toFixed(2)} gal\n` +
-          `Fuel range max: ${totalRangeMiles.toFixed(1)} miles`;
+          this.roadGeometry = new THREE.PlaneGeometry(targetUnits + 8, 6);
+          this.roadMesh = new THREE.Mesh(
+            this.roadGeometry,
+            new THREE.MeshStandardMaterial({ color: config.isSnowy ? 0x8d99a8 : 0x252a36, roughness: 1 })
+          );
+          this.roadMesh.rotation.x = -Math.PI / 2;
+          this.roadMesh.position.y = 0.01;
+          this.roadMesh.position.x = targetUnits / 2;
+          scene.add(this.roadMesh);
+
+          this.laneGeometry = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0.02, 0),
+            new THREE.Vector3(targetUnits, 0.02, 0),
+          ]);
+          this.laneMesh = new THREE.Line(this.laneGeometry, new THREE.LineBasicMaterial({ color: 0xf8fafc }));
+          scene.add(this.laneMesh);
+        }
       }
 
-      function step() {
-        const dt = Math.min(clock.getDelta(), 0.05);
+      class MarkerObject {
+        constructor(scene, name, xPositionUnits) {
+          this.name = name;
+          this.rigidBody = null;
+          this.geometry = new THREE.CylinderGeometry(0.4, 0.4, 1.2, 16);
+          this.mesh = new THREE.Mesh(
+            this.geometry,
+            new THREE.MeshStandardMaterial({ color: 0x60a5fa })
+          );
+          this.mesh.position.set(xPositionUnits, 0.6, -2.8);
+          scene.add(this.mesh);
+        }
+      }
 
-        if (!done) {
-          elapsedSeconds += dt;
+      class CarObject {
+        constructor(scene, world, speedMetersPerSecond, isSnowy) {
+          this.rigidBody = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 0.6, 0));
+          this.collider = world.createCollider(
+            RAPIER.ColliderDesc.cuboid(1.1, 0.55, 0.6).setFriction(isSnowy ? 0.2 : 0.7),
+            this.rigidBody
+          );
+          this.rigidBody.setLinvel({ x: speedMetersPerSecond, y: 0, z: 0 }, true);
+          this.geometry = new THREE.BoxGeometry(2.2, 1.1, 1.2);
+          this.mesh = new THREE.Mesh(
+            this.geometry,
+            new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.6, metalness: 0.1 })
+          );
+          this.mesh.position.set(0, 0.65, 0);
+          scene.add(this.mesh);
 
-          const simDt = dt * config.timeScale;
-          const travelMiles = speedMilesPerSecond * simDt;
-          const fuelUsed = travelMiles / config.mpg;
-          distanceTraveledMiles += travelMiles;
-          fuelLeftGallons -= fuelUsed;
-
-          const traveledUnits = distanceTraveledMiles * config.milesToWorldUnits;
-          car.position.x = Math.min(traveledUnits, targetUnits);
-
-          if (fuelLeftGallons < 0 || traveledUnits > maxUnitsByFuel) {
-            done = true;
-            failed = true;
-          } else if (distanceTraveledMiles >= config.distanceMiles) {
-            done = true;
+          this.wheelGeometry = new THREE.CylinderGeometry(0.32, 0.32, 0.24, 18);
+          this.wheelMeshes = [];
+          const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0f172a });
+          const wheelOffsets = [
+            [0.75, 0.33, 0.55],
+            [0.75, 0.33, -0.55],
+            [-0.75, 0.33, 0.55],
+            [-0.75, 0.33, -0.55],
+          ];
+          for (const [x, y, z] of wheelOffsets) {
+            const wheel = new THREE.Mesh(this.wheelGeometry, wheelMat);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.position.set(x, y, z);
+            this.mesh.add(wheel);
+            this.wheelMeshes.push(wheel);
           }
         }
 
-        renderHud();
-        renderer.render(scene, camera);
-        requestAnimationFrame(step);
+        syncFromPhysics(metersPerUnit) {
+          if (!this.rigidBody) return;
+          const t = this.rigidBody.translation();
+          this.mesh.position.x = t.x / metersPerUnit;
+        }
       }
 
-      renderHud();
-      step();
+      class SnowSystem {
+        constructor(scene, isSnowy) {
+          this.rigidBody = null;
+          this.enabled = isSnowy;
+          this.geometry = new THREE.BufferGeometry();
+          this.mesh = new THREE.Points(
+            this.geometry,
+            new THREE.PointsMaterial({ color: 0xffffff, size: 0.12, transparent: true, opacity: 0.85 })
+          );
 
-      window.addEventListener("resize", () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-      });
+          const count = isSnowy ? 1400 : 0;
+          const positions = new Float32Array(count * 3);
+          for (let i = 0; i < count; i += 1) {
+            positions[i * 3] = (Math.random() - 0.5) * 120;
+            positions[i * 3 + 1] = Math.random() * 40 + 2;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 50;
+          }
+          this.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          if (this.enabled) {
+            scene.add(this.mesh);
+          }
+        }
+
+        step() {
+          if (!this.enabled) return;
+          const positions = this.geometry.attributes.position.array;
+          for (let i = 0; i < positions.length; i += 3) {
+            positions[i + 1] -= 0.2;
+            positions[i] += 0.01;
+            if (positions[i + 1] < 0.1) {
+              positions[i + 1] = Math.random() * 40 + 2;
+              positions[i] = (Math.random() - 0.5) * 120;
+              positions[i + 2] = (Math.random() - 0.5) * 50;
+            }
+          }
+          this.geometry.attributes.position.needsUpdate = true;
+        }
+      }
+
+      class DriveSimulationApp {
+        constructor() {
+          this.config = new DriveConfig();
+          this.hud = document.getElementById("hud");
+          if (!this.hud) throw new Error("HUD container missing.");
+
+          this.snowSpeedMultiplier = this.config.isSnowy ? 0.7 : 1;
+          this.snowFuelPenalty = this.config.isSnowy ? 1.35 : 1;
+          this.totalRangeMiles = this.config.fuelGallons * this.config.mpg;
+          this.targetUnits = this.config.distanceMiles * this.config.milesToWorldUnits;
+          this.metersPerUnit = 10;
+          this.metersPerMile = this.config.milesToWorldUnits * this.metersPerUnit;
+          this.targetMeters = this.config.distanceMiles * this.metersPerMile;
+          const effectiveSpeedMph = this.config.speedMph * this.snowSpeedMultiplier;
+          this.speedMetersPerSecond = (effectiveSpeedMph / 3600) * this.metersPerMile;
+
+          this.fuelLeftGallons = this.config.fuelGallons;
+          this.distanceTraveledMiles = 0;
+          this.elapsedSeconds = 0;
+          this.done = false;
+          this.failed = false;
+          this.tickCount = 0;
+          this.rapierReady = false;
+          this.previousBodyX = 0;
+          this.accumulator = 0;
+          this.fixedDt = 1 / 60;
+
+          this.scene = new THREE.Scene();
+          this.scene.background = new THREE.Color(this.config.isSnowy ? 0x708090 : 0x10151f);
+          this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+          this.camera.position.set(0, 18, 36);
+          this.camera.lookAt(0, 0, 0);
+          this.renderer = new THREE.WebGLRenderer({ antialias: true });
+          this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
+          document.body.appendChild(this.renderer.domElement);
+          this.clock = new THREE.Clock();
+
+          this.world = null;
+
+          this.setupLights();
+          this.terrain = null;
+          this.startMarker = new MarkerObject(this.scene, this.config.fromName, 0);
+          this.endMarker = new MarkerObject(this.scene, this.config.toName, this.targetUnits);
+          this.car = null;
+          this.snowSystem = new SnowSystem(this.scene, this.config.isSnowy);
+        }
+
+        setupLights() {
+          const hemi = new THREE.HemisphereLight(0xffffff, 0x1f2937, 1.2);
+          const dir = new THREE.DirectionalLight(0xffffff, 1);
+          dir.position.set(10, 20, 8);
+          this.scene.add(hemi);
+          this.scene.add(dir);
+        }
+
+        async initRapier() {
+          await RAPIER.init();
+          this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+          this.terrain = new TerrainObject(this.scene, this.config, this.targetUnits, this.world, this.targetMeters);
+          this.car = new CarObject(this.scene, this.world, this.speedMetersPerSecond, this.config.isSnowy);
+          this.previousBodyX = this.car.rigidBody.translation().x;
+          this.rapierReady = true;
+        }
+
+        renderHud() {
+          const status = !this.rapierReady
+            ? "INITIALIZING"
+            : this.failed
+              ? "FAIL (ran out of fuel)"
+              : this.done
+                ? "PASS"
+                : "IN PROGRESS";
+          this.hud.textContent =
+            `Three.js + Rapier Drive Demo\n` +
+            `${this.config.fromName} -> ${this.config.toName}\n` +
+            `Status: ${status}\n` +
+            `Ticks: ${this.tickCount}\n` +
+            `Weather: ${this.config.weather}\n` +
+            `Speed factor: x${this.snowSpeedMultiplier.toFixed(2)}\n` +
+            `Fuel penalty: x${this.snowFuelPenalty.toFixed(2)}\n` +
+            `Distance traveled: ${this.distanceTraveledMiles.toFixed(2)} / ${this.config.distanceMiles.toFixed(2)} miles\n` +
+            `Fuel left: ${this.fuelLeftGallons.toFixed(2)} gal\n` +
+            `Fuel range max: ${this.totalRangeMiles.toFixed(1)} miles`;
+        }
+
+        simulatePhysicsStep(stepDt) {
+          if (!this.world || !this.car || !this.car.rigidBody) return;
+          this.world.timestep = stepDt;
+          this.world.step();
+          this.tickCount += 1;
+
+          if (this.done) return;
+          this.elapsedSeconds += stepDt;
+          const x = this.car.rigidBody.translation().x;
+          const stepMeters = Math.max(0, x - this.previousBodyX);
+          this.previousBodyX = x;
+
+          const travelMiles = stepMeters / this.metersPerMile;
+          const fuelUsed = (travelMiles / this.config.mpg) * this.snowFuelPenalty;
+          this.distanceTraveledMiles += travelMiles;
+          this.fuelLeftGallons -= fuelUsed;
+
+          if (this.fuelLeftGallons < 0) {
+            this.done = true;
+            this.failed = true;
+          } else if (this.distanceTraveledMiles >= this.config.distanceMiles) {
+            this.done = true;
+          }
+        }
+
+        animate = () => {
+          const frameDt = Math.min(this.clock.getDelta(), 0.05);
+          if (this.rapierReady) {
+            this.accumulator += frameDt * this.config.timeScale;
+            while (this.accumulator >= this.fixedDt) {
+              this.simulatePhysicsStep(this.fixedDt);
+              this.accumulator -= this.fixedDt;
+            }
+            if (this.car) {
+              this.car.syncFromPhysics(this.metersPerUnit);
+            }
+          }
+          this.snowSystem.step();
+          this.renderHud();
+          this.renderer.render(this.scene, this.camera);
+          requestAnimationFrame(this.animate);
+        };
+
+        start() {
+          this.renderHud();
+          this.initRapier().then(() => this.animate());
+        }
+
+        onResize() {
+          this.camera.aspect = window.innerWidth / window.innerHeight;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+      }
+
+      const app = new DriveSimulationApp();
+      app.start();
+      window.addEventListener("resize", () => app.onResize());
     </script>
   </body>
 </html>

@@ -1,164 +1,90 @@
-import { addComponent, addEntity, createWorld, query } from "bitecs";
-
-// --- Types ---
-
-const TripStatus = { ACTIVE: 1, SUCCEEDED: 2, FAILED: 3 } as const;
+import RAPIER from "@dimforge/rapier3d-compat";
 
 type SimConfig = {
   fromName: string;
   toName: string;
-  fromMiles: number;
-  toMiles: number;
+  distanceMiles: number;
   carName: string;
   speedMph: number;
   fuelGallons: number;
   mpg: number;
-  tickMinutes?: number;
+  dtSeconds?: number;
 };
 
-type DriveWorld = ReturnType<typeof createDriveWorld>;
+const METERS_PER_MILE = 1609.34;
 
-// --- SoA accessor ---
+async function runDriveSimulation(config: SimConfig): Promise<void> {
+  await RAPIER.init();
 
-function get(arr: number[], eid: number): number {
-  return arr[eid] ?? 0;
-}
+  const dtSeconds = config.dtSeconds ?? 5 / 60;
+  const speedMps = (config.speedMph * METERS_PER_MILE) / 3600;
+  const distanceMeters = config.distanceMiles * METERS_PER_MILE;
+  const maxRangeMiles = config.fuelGallons * config.mpg;
 
-// --- World setup ---
+  const world = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  world.timestep = dtSeconds;
 
-function createDriveWorld() {
-  return createWorld({
-    components: {
-      CarTag: [] as number[],
-      Kinematics: {
-        position: [] as number[],
-        destination: [] as number[],
-        speed: [] as number[],
-      },
-      Fuel: {
-        gallons: [] as number[],
-        mpg: [] as number[],
-        used: [] as number[],
-      },
-      Trip: {
-        status: [] as number[],
-        elapsedMinutes: [] as number[],
-      },
-    },
-  });
-}
+  // Static road plane.
+  const groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0));
+  world.createCollider(RAPIER.ColliderDesc.cuboid(2000, 0.5, 10), groundBody);
 
-function setupCar(world: DriveWorld, config: SimConfig): number {
-  const { CarTag, Kinematics, Fuel, Trip } = world.components;
+  // Dynamic car body.
+  const carBody = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 0.5, 0));
+  world.createCollider(RAPIER.ColliderDesc.cuboid(1, 0.5, 2), carBody);
+  carBody.setLinvel({ x: speedMps, y: 0, z: 0 }, true);
 
-  const car = addEntity(world);
-  addComponent(world, car, CarTag);
-  addComponent(world, car, Kinematics);
-  addComponent(world, car, Fuel);
-  addComponent(world, car, Trip);
+  let ticks = 0;
+  let traveledMeters = 0;
+  let lastX = carBody.translation().x;
+  let fuelLeftGallons = config.fuelGallons;
+  let failed = false;
 
-  Kinematics.position[car] = config.fromMiles;
-  Kinematics.destination[car] = config.toMiles;
-  Kinematics.speed[car] = config.speedMph;
-  Fuel.gallons[car] = config.fuelGallons;
-  Fuel.mpg[car] = config.mpg;
-  Fuel.used[car] = 0;
-  Trip.status[car] = TripStatus.ACTIVE;
-  Trip.elapsedMinutes[car] = 0;
-
-  return car;
-}
-
-// --- Systems ---
-
-function motionSystem(world: DriveWorld, dtHours: number): void {
-  const { CarTag, Kinematics, Fuel, Trip } = world.components;
-
-  for (const eid of query(world, [CarTag, Kinematics, Fuel, Trip])) {
-    if (get(Trip.status, eid) !== TripStatus.ACTIVE) continue;
-
-    const remaining = get(Kinematics.destination, eid) - get(Kinematics.position, eid);
-    const speed = get(Kinematics.speed, eid);
-    const mpg = get(Fuel.mpg, eid) || 1;
-    const idealTravel = speed * dtHours;
-    const maxTravelByFuel = get(Fuel.gallons, eid) * mpg;
-    const travel = Math.min(idealTravel, remaining, maxTravelByFuel);
-    const fuelBurned = travel / mpg;
-
-    Kinematics.position[eid] = get(Kinematics.position, eid) + travel;
-    Fuel.gallons[eid] = get(Fuel.gallons, eid) - fuelBurned;
-    Fuel.used[eid] = get(Fuel.used, eid) + fuelBurned;
-    Trip.elapsedMinutes[eid] = get(Trip.elapsedMinutes, eid) + dtHours * 60;
-  }
-}
-
-function constraintSystem(world: DriveWorld): void {
-  const { CarTag, Kinematics, Fuel, Trip } = world.components;
-
-  for (const eid of query(world, [CarTag, Kinematics, Fuel, Trip])) {
-    if (get(Trip.status, eid) !== TripStatus.ACTIVE) continue;
-
-    const position = get(Kinematics.position, eid);
-    const destination = get(Kinematics.destination, eid);
-
-    // Arrival check
-    if (position >= destination - 1e-6) {
-      Trip.status[eid] = TripStatus.SUCCEEDED;
-      continue;
-    }
-
-    // Fuel exhaustion check
-    if (get(Fuel.gallons, eid) <= 1e-9) {
-      Trip.status[eid] = TripStatus.FAILED;
-    }
-  }
-}
-
-// --- Simulation runner ---
-
-function runDriveSimulation(config: SimConfig): void {
-  const tickMinutes = config.tickMinutes ?? 1;
-  const dtHours = tickMinutes / 60;
-  const totalDistance = config.toMiles - config.fromMiles;
-  const maxRange = config.fuelGallons * config.mpg;
-
-  const world = createDriveWorld();
-  const car = setupCar(world, config);
-  const { Kinematics, Fuel, Trip } = world.components;
-
-  console.log(`Simulating drive: ${config.fromName} -> ${config.toName}`);
+  console.log(`Simulating drive (Rapier): ${config.fromName} -> ${config.toName}`);
   console.log(`Car: ${config.carName}`);
-  console.log(`Distance: ${totalDistance.toFixed(1)} miles`);
+  console.log(`Distance: ${config.distanceMiles.toFixed(1)} miles`);
   console.log(`Speed: ${config.speedMph} mph`);
-  console.log(`Fuel range: ${maxRange.toFixed(1)} miles`);
+  console.log(`Fuel range: ${maxRangeMiles.toFixed(1)} miles`);
 
-  while (get(Trip.status, car) === TripStatus.ACTIVE) {
-    motionSystem(world, dtHours);
-    constraintSystem(world);
+  while (traveledMeters < distanceMeters) {
+    world.step();
+    ticks += 1;
+
+    const currentX = carBody.translation().x;
+    const stepTravelMeters = Math.max(0, currentX - lastX);
+    lastX = currentX;
+    traveledMeters += stepTravelMeters;
+
+    const stepTravelMiles = stepTravelMeters / METERS_PER_MILE;
+    fuelLeftGallons -= stepTravelMiles / config.mpg;
+
+    if (fuelLeftGallons < 0) {
+      failed = true;
+      break;
+    }
   }
 
-  const status = get(Trip.status, car);
+  const elapsedMinutes = (ticks * dtSeconds) / 60;
+  const traveledMiles = traveledMeters / METERS_PER_MILE;
 
-  if (status === TripStatus.FAILED) {
+  if (failed) {
     console.log("Result: FAIL (not enough fuel)");
-    console.log(`Distance reached: ${get(Kinematics.position, car).toFixed(2)} miles from start`);
-    console.log(`Fuel left: ${get(Fuel.gallons, car).toFixed(2)} gallons`);
+    console.log(`Ticks: ${ticks}`);
+    console.log(`Distance reached: ${traveledMiles.toFixed(2)} miles`);
+    console.log(`Fuel left: ${Math.max(0, fuelLeftGallons).toFixed(2)} gallons`);
     return;
   }
 
   console.log("Result: PASS");
-  console.log(`Estimated duration: ${get(Trip.elapsedMinutes, car).toFixed(1)} minutes`);
-  console.log(`Fuel used: ${get(Fuel.used, car).toFixed(2)} gallons`);
-  console.log(`Fuel left: ${get(Fuel.gallons, car).toFixed(2)} gallons`);
+  console.log(`Ticks: ${ticks}`);
+  console.log(`Estimated duration: ${elapsedMinutes.toFixed(1)} minutes`);
+  console.log(`Fuel used: ${(config.fuelGallons - fuelLeftGallons).toFixed(2)} gallons`);
+  console.log(`Fuel left: ${fuelLeftGallons.toFixed(2)} gallons`);
 }
 
-// --- Demo ---
-
-runDriveSimulation({
+await runDriveSimulation({
   fromName: "Point A",
   toName: "Point B",
-  fromMiles: 0,
-  toMiles: 30,
+  distanceMiles: 30,
   carName: "Demo Car",
   speedMph: 60,
   fuelGallons: 2,

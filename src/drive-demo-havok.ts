@@ -12,6 +12,7 @@ type SimConfig = {
   speedMph: number;
   fuelGallons: number;
   mpg: number;
+  weather: "clear" | "snowy";
 };
 
 const METERS_PER_MILE = 1609.34;
@@ -35,6 +36,11 @@ async function runHavokDriveDemo(config: SimConfig): Promise<void> {
   camera.setTarget(Vector3.Zero());
   scene.activeCamera = camera;
 
+  const isSnowy = config.weather === "snowy";
+  const snowSpeedMultiplier = isSnowy ? 0.7 : 1;
+  const snowFuelPenalty = isSnowy ? 1.35 : 1;
+  const roadFriction = isSnowy ? 0.2 : 0.5;
+
   const ground = MeshBuilder.CreateGround("ground", { width: 20, height: 20 }, scene);
   new PhysicsAggregate(ground, PhysicsShapeType.BOX, { mass: 0 }, scene);
 
@@ -43,12 +49,12 @@ async function runHavokDriveDemo(config: SimConfig): Promise<void> {
   const carAggregate = new PhysicsAggregate(
     car,
     PhysicsShapeType.BOX,
-    { mass: 1200, friction: 0.5, restitution: 0.0 },
+    { mass: 1200, friction: roadFriction, restitution: 0.0 },
     scene,
   );
 
   const distanceMeters = config.distanceMiles * METERS_PER_MILE;
-  const speedMps = (config.speedMph * METERS_PER_MILE) / SECONDS_PER_HOUR;
+  const speedMps = ((config.speedMph * snowSpeedMultiplier) * METERS_PER_MILE) / SECONDS_PER_HOUR;
   const maxRangeMiles = config.fuelGallons * config.mpg;
   const maxTravelMeters = maxRangeMiles * METERS_PER_MILE;
 
@@ -63,6 +69,8 @@ async function runHavokDriveDemo(config: SimConfig): Promise<void> {
   console.log(`Havok drive simulation: ${config.fromName} -> ${config.toName}`);
   console.log(`Distance: ${config.distanceMiles.toFixed(1)} miles`);
   console.log(`Speed: ${config.speedMph} mph`);
+  console.log(`Weather: ${config.weather}`);
+  console.log(`Speed factor: x${snowSpeedMultiplier.toFixed(2)} | Fuel penalty: x${snowFuelPenalty.toFixed(2)}`);
   console.log(`Fuel range: ${maxRangeMiles.toFixed(1)} miles`);
 
   while (traveledMeters < distanceMeters) {
@@ -71,7 +79,7 @@ async function runHavokDriveDemo(config: SimConfig): Promise<void> {
 
     const stepTravel = speedMps * DT_SECONDS;
     traveledMeters += stepTravel;
-    const stepFuelUsed = (stepTravel / METERS_PER_MILE) / config.mpg;
+    const stepFuelUsed = ((stepTravel / METERS_PER_MILE) / config.mpg) * snowFuelPenalty;
     fuelLeftGallons -= stepFuelUsed;
 
     if (traveledMeters > maxTravelMeters || fuelLeftGallons < 0) {
@@ -107,4 +115,5 @@ await runHavokDriveDemo({
   speedMph: 60,
   fuelGallons: 2,
   mpg: 20,
+  weather: "snowy",
 });
