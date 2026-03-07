@@ -42,3 +42,5 @@ Use a frame-grounded hierarchy:
 4. Executable timeline plus simulation checks.
 
 Reference summary: [Frame-Grounded-Hierarchical-Planning-Summary.docx](./Frame-Grounded-Hierarchical-Planning-Summary.docx)
+
+![Architecture diagram](./docs/arch-plan.png)

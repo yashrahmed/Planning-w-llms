@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add src/campsite-cooking-rain.html)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
+    ]
+  }
+}
