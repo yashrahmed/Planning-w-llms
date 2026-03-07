@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@planning-w-llms/domain": "workspace:*",
+    "ai": "^6.0.116",
     "pg": "^8.16.3"
   },
   "devDependencies": {
