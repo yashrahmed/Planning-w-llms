@@ -4,9 +4,13 @@
   "private": true,
   "description": "Frame-grounded hierarchical planning prototype using TypeScript, Bun, and Fastify.",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun --watch src/server.ts",
     "check": "tsc --noEmit",
+    "check:packages": "tsc --noEmit -p tsconfig.packages.json",
     "serve": "http-server -p 8000 .",
     "start": "bun run check && bun src/hello.ts",
     "typecheck": "tsc --noEmit"
