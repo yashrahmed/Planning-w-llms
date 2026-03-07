@@ -1,3 +1,5 @@
+# Defunct: Development Continues in [Thoth](https://github.com/yashrahmed/Thoth)
+
 # Planning with LLMs (TypeScript + Bun + Fastify)
 
 This project explores frame-grounded hierarchical planning for end-to-end camping logistics using TypeScript.
