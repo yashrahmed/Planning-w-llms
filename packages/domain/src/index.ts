@@ -23,4 +23,5 @@ export interface Conversation {
   last_update_ts: Date;
 }
 
+export * from "./conversation-query.js";
 export * from "./message-query.js";
