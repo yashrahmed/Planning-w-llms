@@ -12,6 +12,18 @@ This project explores frame-grounded hierarchical planning for end-to-end campin
 
 Use `Prisma` for DB connectivity when the persistence layer is added, but Prisma is intentionally **not installed** yet.
 
+## Local Postgres
+
+This repo now includes the same local Docker Postgres pattern used in `Thoth`:
+
+1. Copy `db/local/.env.example` to `db/local/.env`.
+2. Start Postgres plus run Flyway migrations:
+   - `bun run db:local:launch`
+3. Stop the local database:
+   - `bun run db:local:stop`
+
+The database uses the `pgvector` image and enables the `vector` extension during initialization.
+
 ## Quick start
 
 1. Install dependencies:

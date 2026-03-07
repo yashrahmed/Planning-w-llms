@@ -3,5 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts"
+  "main": "./src/index.ts",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "typecheck": "bun x tsc --noEmit"
+  },
+  "dependencies": {
+    "@planning-w-llms/domain": "workspace:*",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5"
+  }
 }

@@ -8,6 +8,8 @@
     "packages/*"
   ],
   "scripts": {
+    "db:local:launch": "./scripts/db-local-launch.sh",
+    "db:local:stop": "./scripts/db-local-stop.sh",
     "dev": "bun --watch src/server.ts",
     "check": "tsc --noEmit",
     "check:packages": "tsc --noEmit -p tsconfig.packages.json",

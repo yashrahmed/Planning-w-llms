@@ -218,3 +218,6 @@ keys-config.yml
 
 # Local corpus data and generated embedding artifacts
 resources/corpus/
+
+# Local Postgres state
+db/local/_data/
