@@ -1,5 +1,8 @@
 # IFF QA Pipeline (Simple, Authoritative)
 
+## Additional Goal
+Develop a planning library that supports multiple planning algorithms, with variants in Java, Typescript, and Python, and possibly Rust.
+
 ## Goal
 Build a QA pipeline that answers aircraft questions with high precision using:
 - Structured facts as the primary source of truth
