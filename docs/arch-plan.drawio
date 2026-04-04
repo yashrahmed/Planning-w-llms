@@ -10,7 +10,7 @@
         <mxCell id="i18KCtubxXVpSr7fe9qj-2" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="Natural language request&lt;br&gt;-----&amp;gt; Frame slot filling (from APIs)&lt;br&gt;----&amp;gt; Classical planning&lt;br&gt;-----&amp;gt; Simulation verification." vertex="1">
           <mxGeometry height="110" width="260" x="500" y="610" as="geometry" />
         </mxCell>
-        <mxCell id="i18KCtubxXVpSr7fe9qj-4" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;" value="Conversation DB" vertex="1">
+        <mxCell id="i18KCtubxXVpSr7fe9qj-4" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;" value="Conversation Store" vertex="1">
           <mxGeometry height="90" width="110" x="530" y="505" as="geometry" />
         </mxCell>
         <mxCell id="i18KCtubxXVpSr7fe9qj-5" edge="1" parent="1" source="i18KCtubxXVpSr7fe9qj-1" style="endArrow=classic;startArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" target="i18KCtubxXVpSr7fe9qj-4" value="">
