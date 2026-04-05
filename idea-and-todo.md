@@ -55,3 +55,4 @@ Reference summary: [Frame-Grounded-Hierarchical-Planning-Summary.docx](./Frame-G
 
 ### What to do next?
 - Find ways to extract activity annotations (labels) from the above datasets.
+- Think on the side about how to build game like RL enviroments for agents.
