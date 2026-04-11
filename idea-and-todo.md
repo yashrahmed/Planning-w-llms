@@ -56,3 +56,72 @@ Reference summary: [Frame-Grounded-Hierarchical-Planning-Summary.docx](./Frame-G
 ### What to do next?
 - Find ways to extract activity annotations (labels) from the above datasets.
 - Think on the side about how to build game like RL enviroments for agents.
+
+__________
+
+### Idea scratchpad
+
+Plan a camping trip at Athelstane, WI.
+
+When are we going there?
+Who are the people traveling?
+When are they traveling?
+How long is the trip? Is the duration of stay the same for everyone?
+What is each person carrying?
+How will each person get there?
+What vehicles (if any) are they using?
+How will the things being carried by each person be packed?
+What route will the vehicles take?
+Are there any driving constraints like the fuel and EV charging time?
+What food will be required/be available to each of them?
+How will that food be cooked?
+...
+...
+...
+
+Meal Prep Frame
+- Cuisine/Food name
+- Ingredients (with qty).
+- Prep conditions.
+- Steps.
+
+Cooking frame
+- Cuisine/Food name
+- Ref<Meal Prep Frame>
+- Utensils/Tools
+
+Utensil prep frame
+- Utensil name
+- Precondition
+- Post condition
+  
+Accessible tools frame -- use to ensure that tools are easy to get to e.g. a ladle required for prep cannot be a hundred miles away.
+- Accessing agent (who needs it)
+  - Location
+- Tools
+  - Ref<Utensil Prep Frame>
+  - Location
+
+
+  ....
+
+There are a large number of frames for any scenario.
+To truly ground a scene, many frames have to be filled out.
+I may have to brute force a list of these frames based on 
+ - Life experience.
+ - Action datasets.
+
+- Perhaps a decomposition worklow would make it easy to constrain the relations. Let's start with a procedural approach and then gradually move over to a declarative approach.
+- LLM coding agents can help generate and decompose multiple workflows.
+- Workflows encode some aspect of cognitive processes instead of forcing the LLM to figure out the cognitive processes.
+Let's start with camping trip planning
+
+
+--- An example of code placement plan
+1. Describe the logic change. 
+2. What code flows would be affected?
+3. In each code flow what components would be affected?
+4. Will the resulting change lead to duplicated code?
+5. If so, factor it out.
+6. Refactor.
+7. Update the flow structure.
