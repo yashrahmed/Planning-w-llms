@@ -1,9 +1,13 @@
 ## Goal - [Career - How agent models/datasets are built] - Planning with LLMs.
 
-Design an agent harness + fine tune a model to beat or match some of the benchmarks below.
+Design an agent harness + fine tune a model for that harness to beat or match some of the benchmarks below.
 TBD - Narrow down the choice of datasets.
 
-## Text-Only LLM Spatial Datasets
+### Version 1
+- [ ] Build a harness for a model to beat FloorplanQA.
+- [ ] Learn about building [reasoning LLMs](https://www.manning.com/books/build-a-reasoning-model-from-scratch).
+
+### Text-Only LLM Spatial Datasets
 
 | Dataset Name [1, 2, 3] | Primary Data Format | Spatial Concepts Tested | Key Purpose / Feature |
 |---|---|---|---|
@@ -11,7 +15,7 @@ TBD - Narrow down the choice of datasets.
 | SnorkelSpatial[](https://snorkel.ai/blog/introducing-snorkelspatial/) | Alphanumeric coordinate strings | Grid placement, egocentric perspective | Uses narrative movement logs to test if a model can track changing positions. |
 | SpatialEval (TQA)[](https://github.com/jiayuww/SpatialEval) | Descriptive matrix strings | Maze tracking, text coordinates | Isolates spatial thinking by stripping away all visual hints. |
 
-## Multimodal LLM (MLLM) Spatial Datasets
+### Multimodal LLM (MLLM) Spatial Datasets
 
 | Dataset Name [4, 5, 6, 7, 8] | Primary Data Format | Spatial Concepts Tested | Key Purpose / Feature |
 |---|---|---|---|
