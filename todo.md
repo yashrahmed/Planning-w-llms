@@ -6,6 +6,9 @@ TBD - Narrow down the choice of datasets.
 ### Version 1
 - [ ] Build a harness for a model to beat FloorplanQA.
 - [ ] Learn about building [reasoning LLMs](https://www.manning.com/books/build-a-reasoning-model-from-scratch).
+- [ ] See [SpatialClaw](https://spatialclaw.github.io/?linkId=100000426730902)
+
+### Things to check
 
 ### Text-Only LLM Spatial Datasets
 
