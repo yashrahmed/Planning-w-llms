@@ -4,7 +4,9 @@ Design an agent harness + fine tune a model for that harness to beat or match so
 TBD - Narrow down the choice of datasets.
 
 ### Version 1
-- [ ] Build a harness for a model to beat FloorplanQA.
+- [ ] Build a harness for a model to beat [FloorplanQA].
+  - [Layouts](https://huggingface.co/datasets/OldDelorean/FloorplanQA-Layouts).
+  - See generator for [Questions](https://github.com/OldDeLorean/FloorplanQA).
 - [ ] Learn about building [reasoning LLMs](https://www.manning.com/books/build-a-reasoning-model-from-scratch).
 - [ ] See [SpatialClaw](https://spatialclaw.github.io/?linkId=100000426730902)
 
