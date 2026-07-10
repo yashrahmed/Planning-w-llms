@@ -41,6 +41,6 @@ the downloaded layouts:
 ./scripts/generate_questions.sh 5
 ```
 
-The command writes `dataset/train-qa/questions.jsonl`, replacing that file on
+The command writes `datasets/train-qa/questions.jsonl`, replacing that file on
 each run. It uses the upstream FloorplanQA pair-distance prompt template from
 `fpqa-tooling/` and includes the computed reference answer with each question.

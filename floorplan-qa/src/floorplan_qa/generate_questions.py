@@ -17,7 +17,7 @@ from typing import Any
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LAYOUT_DIR = PACKAGE_ROOT / "datasets" / "FloorplanQA-Layouts" / "layouts"
 DEFAULT_TOOLING_DIR = PACKAGE_ROOT / "fpqa-tooling"
-DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "dataset" / "train-qa"
+DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "datasets" / "train-qa"
 OUTPUT_FILENAME = "questions.jsonl"
 
 
