@@ -219,5 +219,11 @@ keys-config.yml
 # Local corpus data and generated embedding artifacts
 resources/corpus/
 
+# Downloaded FloorplanQA dataset
+floorplan-qa/datasets/
+
+# Materialized upstream FloorplanQA tooling (not a nested Git repository)
+floorplan-qa/fpqa-tooling/
+
 # Local Postgres state
 db/local/_data/
