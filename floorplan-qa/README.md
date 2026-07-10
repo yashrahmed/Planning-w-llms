@@ -31,3 +31,16 @@ The command downloads a GitHub source archive into `fpqa-tooling/`. Source
 archives do not contain `.git` metadata, and the destination is ignored by the
 main repository. Use `--revision <branch-tag-or-commit>` to select something
 other than `main`.
+
+## Generate training questions
+
+Generate a requested number of deterministic pair-distance QA examples from
+the downloaded layouts:
+
+```shell
+./scripts/generate_questions.sh 5
+```
+
+The command writes `dataset/train-qa/questions.jsonl`, replacing that file on
+each run. It uses the upstream FloorplanQA pair-distance prompt template from
+`fpqa-tooling/` and includes the computed reference answer with each question.
