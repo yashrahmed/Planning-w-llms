@@ -44,3 +44,24 @@ the downloaded layouts:
 The command writes `datasets/train-qa/questions.jsonl`, replacing that file on
 each run. It uses the upstream FloorplanQA pair-distance prompt template from
 `fpqa-tooling/` and includes the computed reference answer with each question.
+
+## Evaluate local Qwen 3.5 4B models
+
+Both evaluators accept a QA JSONL path, remove reference/assistant messages from
+each record, run one example at a time, print a per-example verdict, and finish
+with an aggregate score.
+
+With Ollama running and `qwen3.5:4b` available:
+
+```shell
+./scripts/evaluate_ollama.sh datasets/train-qa/questions.jsonl
+```
+
+On Apple silicon, run the Hugging Face-hosted MLX-LM 4-bit conversion with:
+
+```shell
+./scripts/evaluate_huggingface.sh datasets/train-qa/questions.jsonl
+```
+
+Pass `--thinking` to either command to enable Qwen's thinking mode. Use
+`--model` or `--max-tokens` after the JSONL path to override the defaults.
