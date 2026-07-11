@@ -80,6 +80,12 @@ sample should therefore be stratified by task type and room source. Sampling
 task types without stratification produces a different distribution from the
 benchmark.
 
+The generator interface should select layouts, not individual task types. Each
+selected layout should emit all eight task records. For example, requesting 20
+layouts should produce 160 questions. If a caller needs a fixed number of
+questions instead, that should be a separate explicitly stratified sampling
+operation over an already generated eight-task-per-layout collection.
+
 ## Shared geometry preparation
 
 For every layout:
@@ -149,6 +155,13 @@ interval and then refine it with bisection. It must find the first collision,
 not merely test whether a later pose is free, because an object cannot pass
 through an intervening obstacle.
 
+The new generator should not use the 0.01 meter stepping algorithm for its
+reference answer. Compute the earliest collision distance continuously from
+the moving polygon against the room boundary and blocking polygons. If a fully
+analytic solution is impractical for a geometry, bracket the first collision
+and refine it deterministically with bisection to a declared distance
+tolerance.
+
 ### Max box
 
 1. Form the blocking union from objects and openings, excluding rugs and
@@ -162,8 +175,24 @@ through an intervening obstacle.
 
 The released implementation is approximate: it uses 300 random starting
 points, 12 angles, coordinate-ascent growth, seed 42, and a 30-second budget.
-A new implementation should expose these approximation parameters and record
-them in each example's provenance.
+A sparse center-and-angle sample can miss a larger valid rectangle between
+samples and therefore underestimate the reference answer.
+
+Use a deterministic global-optimization pipeline instead:
+
+1. Parameterize a rectangle by center, width, height, and rotation.
+2. Maximize `width * height` with a global optimizer such as differential
+   evolution over bounds derived from the room.
+3. Use exact Shapely containment and collision checks as hard feasibility
+   tests for every proposed candidate.
+4. Locally refine the best valid candidates and adaptively subdivide promising
+   position and rotation ranges.
+5. Stop at a documented convergence tolerance and record the best valid lower
+   bound, tolerance, iteration count, seed, and convergence status.
+
+The result is still a numerical optimum rather than a symbolic proof of the
+global maximum, so the prompt and provenance must not claim greater precision
+than the solver's convergence tolerance.
 
 ### Placement
 
@@ -184,6 +213,16 @@ them in each example's provenance.
 5. Return `True` if the valid-center region is nonempty at any angle; otherwise
    return `False`.
 
+Use adaptive rotation refinement rather than a fixed set of center and angle
+samples. Shapely should provide the final containment and collision decision
+for every candidate pose. A deterministic global optimizer may be used as a
+fallback to search `(x, y, theta)`, but configuration-space feasibility is
+preferred because a nonempty valid-center region directly witnesses a valid
+placement. A sampled solver may safely establish `True` by finding a valid
+pose, but it cannot justify `False` merely because its finite samples failed.
+The implementation should report its angular and geometric tolerances and
+retain a witness pose for every `True` answer.
+
 The paper reports a nearly balanced placement target distribution of 49.9%
 `True`. If random object selection does not reproduce that balance, select
 candidate objects using deterministic rejection sampling or stratification.
@@ -200,10 +239,11 @@ candidate objects using deterministic rejection sampling or stratification.
 
 The paper specifies 0.15 meter clearance and A* over a navigable grid. The
 released code instead uses 0.10 meter clearance and a visibility graph followed
-by Dijkstra. A new generator should support explicit compatibility modes:
-
-- `paper`: 0.15 meter clearance and grid A*.
-- `released-code`: 0.10 meter clearance and visibility-graph Dijkstra.
+by Dijkstra. The new generator should use the paper definition by default:
+0.15 meter clearance and grid A*. Grid resolution, connectivity, centroid
+connection rules, and path simplification must be deterministic and recorded
+in provenance. A visibility-graph solver may remain as an optional
+non-benchmark experiment, but it must not generate the default reference path.
 
 ### Visibility
 
@@ -217,7 +257,35 @@ by Dijkstra. A new generator should support explicit compatibility modes:
 The paper scores this answer using set equality, so ordering should not affect
 correctness. The paper text refers to bounding boxes while the released code
 uses the actual polygons; polygon intersections are more consistent with the
-dataset's unified polygon representation.
+dataset's unified polygon representation. The new generator will intentionally
+retain actual-polygon intersection rather than add a paper-style bounding-box
+mode. This is a documented semantic choice: for irregular HSSD objects, a line
+can cross empty space inside an object's bounding box without intersecting the
+object itself.
+
+## Released-layout validation
+
+The paper reports filtering roughly one-third of synthetic candidates for
+overlaps, blocked doors, inadequate clearance, and improper attachment. The
+released corpus contains only the 2,000 layouts that survived that process, so
+the question generator does not need to reproduce the missing candidate
+generation and selection pipeline.
+
+It should nevertheless validate the released input before generating
+questions. At minimum, check that:
+
+1. The room boundary is a valid, nonempty polygon.
+2. Entity polygons are valid and remain within the declared room to a numeric
+   tolerance.
+3. Doors and windows are attached to a room boundary or declared wall.
+4. Labels used by a question identify unambiguous entities.
+5. Blocking-object overlaps are either allowed semantic pairs or are reported.
+6. Path endpoints are connectable to navigable free space.
+
+These checks audit the fixed released corpus; they do not claim to reproduce
+the authors' unpublished validity filter or infer whole-house connectivity.
+Validation results and warnings should be included in record provenance, and a
+layout with an error relevant to a task should not produce that task's record.
 
 ## Prompt and output construction
 
@@ -274,7 +342,7 @@ A clean generator should document its choices for the following discrepancies:
   released code's clearance and visibility-graph solver.
 - Pair-distance code rounds to two decimals while the prompts require three.
 - The paper describes Visibility using bounding boxes while the code checks
-  actual polygons.
+  actual polygons. The new generator intentionally uses actual polygons.
 - The Placement case says 2.5 by 1.0 meters, but its ground-truth paragraph
   discusses a 2 by 1.5 meter rectangle.
 - View Angle, Visibility, and Repositioning load an unreleased
@@ -291,9 +359,21 @@ in place. It should provide:
 
 1. Stable SHA-based sampling.
 2. One shared geometry normalization layer.
-3. Eight independently testable reference solvers.
-4. `paper` and `released-code` compatibility modes.
-5. Solver parameters and version provenance in every record.
-6. Golden tests using the concrete cases above.
-7. Property tests covering polygon vertex order, overlaps, boundary contact,
-   soft-covering filters, and deterministic regeneration.
+3. All eight task records for every selected layout.
+4. Eight independently testable reference solvers.
+5. Paper-style 0.15 meter grid A* for default shortest-path references.
+6. Continuous first-collision computation for Repositioning.
+7. Configuration-space placement and deterministic global optimization for Max
+   Box, both backed by exact collision checks and declared tolerances.
+8. Actual-polygon Visibility as an intentional documented divergence.
+9. Sanity validation of the fixed released layouts without attempting to
+   recreate their candidate-selection pipeline.
+10. Solver parameters, convergence data, validation results, and version
+    provenance in every record.
+11. Golden tests using the concrete cases above.
+12. Property tests covering polygon vertex order, overlaps, boundary contact,
+    soft-covering filters, solver witnesses, and deterministic regeneration.
+
+These are design corrections only. They do not describe the behavior of the
+current experimental generator until the corresponding implementation work is
+completed and verified.
