@@ -34,23 +34,19 @@ other than `main`.
 
 ## Generate training questions
 
-Generate a requested number of deterministic pair-distance QA examples from
-the downloaded layouts:
+Generate a requested number of deterministic QA examples from all eight
+FloorplanQA task families. Task types are balanced in shuffled blocks, and the
+seed controls layout order, task order, and task parameters:
 
 ```shell
-./scripts/generate_questions.sh 5
+./scripts/generate_questions.sh 20 1
 ```
 
 The command writes `datasets/train-qa/questions.jsonl`, replacing that file on
-each run. It uses the upstream FloorplanQA pair-distance prompt template from
-`fpqa-tooling/` and includes the computed reference answer with each question.
-
-## TODO
-
-- Build a new, self-contained question generator that supports the upstream
-  FloorplanQA prompt types, deterministic seeded sampling, and trustworthy
-  reference-answer generation without depending on the upstream repository's
-  incomplete internal module and data paths.
+each run. If the seed is omitted, it defaults to `0`. Each record includes its
+task parameters, typed reference answer, prompt messages, and solver provenance.
+The first implementation follows the paper's task semantics while marking
+approximate solvers as `experimental-v1`.
 
 ## Evaluate local Qwen 3.5 4B models
 
