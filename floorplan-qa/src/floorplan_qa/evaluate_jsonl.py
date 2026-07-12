@@ -6,12 +6,16 @@ import argparse
 import ast
 import json
 import math
+import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -56,6 +60,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", help="Override the backend's default model.")
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--thinking", action="store_true")
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        help="Uniformly sample this many examples before evaluation.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Seed for example sampling and model generation (default: 0).",
+    )
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="Checkpoint structured evaluation results to this JSON file.",
+    )
     parser.add_argument(
         "--ollama-url", default="http://127.0.0.1:11434/api/chat"
     )
@@ -122,6 +142,20 @@ def iter_examples(path: Path) -> Iterator[Example]:
                     else {}
                 ),
             )
+
+
+def sample_examples(
+    examples: list[Example], sample_size: int | None, seed: int
+) -> list[Example]:
+    if sample_size is None:
+        return examples
+    if sample_size < 1:
+        raise ValueError("--sample-size must be positive")
+    if sample_size > len(examples):
+        raise ValueError(
+            f"--sample-size {sample_size} exceeds the {len(examples)} input examples"
+        )
+    return random.Random(seed).sample(examples, sample_size)
 
 
 def extract_model_answer(response: str) -> str | None:
@@ -317,7 +351,7 @@ def make_ollama_runner(args: argparse.Namespace) -> Callable[[Example], str]:
                 "think": args.thinking,
                 "options": {
                     "temperature": 0,
-                    "seed": 42,
+                    "seed": args.seed,
                     "num_ctx": 16384,
                     "num_predict": args.max_tokens,
                 },
@@ -363,7 +397,7 @@ def make_huggingface_runner(args: argparse.Namespace) -> Callable[[Example], str
     model, tokenizer = load(model_id)
 
     def run(example: Example) -> str:
-        mx.random.seed(42)
+        mx.random.seed(args.seed)
         prompt = tokenizer.apply_chat_template(
             example.messages,
             tokenize=False,
@@ -383,6 +417,87 @@ def make_huggingface_runner(args: argparse.Namespace) -> Callable[[Example], str
     return run
 
 
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def selected_model(args: argparse.Namespace) -> str:
+    if args.model:
+        return str(args.model)
+    return DEFAULT_OLLAMA_MODEL if args.backend == "ollama" else DEFAULT_HF_MODEL
+
+
+def build_evaluation_report(
+    args: argparse.Namespace,
+    input_path: Path,
+    input_count: int,
+    examples: list[Example],
+    results: list[dict[str, Any]],
+    started_at: str,
+    status: str,
+) -> dict[str, Any]:
+    completed = len(results)
+    correct = sum(bool(result["correct"]) for result in results)
+    formatting_failures = sum(
+        result["parsed_answer"] is None and result["error"] is None
+        for result in results
+    )
+    task_counts = Counter(example.task for example in examples)
+    source_counts = Counter(
+        (
+            Path(example.source_layout).parent.name
+            if example.source_layout is not None
+            else "unknown"
+        )
+        for example in examples
+    )
+    return {
+        "schema_version": 1,
+        "status": status,
+        "started_at": started_at,
+        "updated_at": utc_now(),
+        "completed_at": utc_now() if status == "complete" else None,
+        "backend": args.backend,
+        "model": selected_model(args),
+        "input": str(input_path),
+        "configuration": {
+            "seed": args.seed,
+            "temperature": 0,
+            "thinking": bool(args.thinking),
+            "max_tokens_per_question": args.max_tokens,
+            "sample_size": len(examples),
+            "input_examples": input_count,
+            "sampling": "uniform_without_replacement",
+        },
+        "selected_distribution": {
+            "tasks": dict(sorted(task_counts.items())),
+            "layout_sources": dict(sorted(source_counts.items())),
+        },
+        "summary": {
+            "completed": completed,
+            "total": len(examples),
+            "correct": correct,
+            "incorrect": completed - correct,
+            "score": correct / completed if completed else 0.0,
+            "formatting_failures": formatting_failures,
+            "runtime_seconds": sum(
+                float(result["duration_seconds"]) for result in results
+            ),
+        },
+        "results": results,
+    }
+
+
+def write_evaluation_report(output_path: Path, report: dict[str, Any]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.name}.tmp")
+    temporary_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(output_path)
+
+
 def print_result(
     index: int,
     total: int,
@@ -390,16 +505,19 @@ def print_result(
     response: str,
     parsed_answer: str | None,
     correct: bool,
+    duration_seconds: float,
+    error: str | None = None,
 ) -> None:
     width = 78
     print("\n" + "=" * width)
     print(f"Example {index}/{total}: {example.example_id} (JSONL line {example.line_number})")
     print("-" * width)
-    print(response.rstrip() or "<empty response>")
+    print(error if error is not None else (response.rstrip() or "<empty response>"))
     print("-" * width)
     print(f"Expected: {example.expected}")
     print(f"Parsed:   {parsed_answer if parsed_answer is not None else '<not found>'}")
     print(f"Result:   {'CORRECT' if correct else 'INCORRECT'}")
+    print(f"Duration: {duration_seconds:.2f}s")
 
 
 def main() -> None:
@@ -410,41 +528,131 @@ def main() -> None:
     if args.max_tokens < 1:
         raise ValueError("--max-tokens must be positive")
 
-    examples = list(iter_examples(path))
-    if not examples:
+    input_examples = list(iter_examples(path))
+    if not input_examples:
         raise ValueError(f"JSONL file contains no examples: {path}")
+    examples = sample_examples(input_examples, args.sample_size, args.seed)
+    output_path = (
+        args.output_json.expanduser().resolve()
+        if args.output_json is not None
+        else None
+    )
+    if output_path is not None and output_path.suffix.casefold() != ".json":
+        raise ValueError("--output-json must end in .json")
 
     runner = (
         make_ollama_runner(args)
         if args.backend == "ollama"
         else make_huggingface_runner(args)
     )
-    print(f"Input: {path}\nExamples: {len(examples)}", flush=True)
+    print(
+        f"Input: {path}\nInput examples: {len(input_examples)}\n"
+        f"Selected examples: {len(examples)}\nSeed: {args.seed}",
+        flush=True,
+    )
+    if output_path is not None:
+        print(f"JSON report: {output_path}", flush=True)
 
-    correct_count = 0
+    started_at = utc_now()
+    results: list[dict[str, Any]] = []
+    if output_path is not None:
+        write_evaluation_report(
+            output_path,
+            build_evaluation_report(
+                args,
+                path,
+                len(input_examples),
+                examples,
+                results,
+                started_at,
+                "running",
+            ),
+        )
     for index, example in enumerate(examples, start=1):
         print(
             f"\nRunning example {index}/{len(examples)}: {example.example_id} ...",
             flush=True,
         )
-        response = runner(example)
-        parsed_answer = extract_model_answer(response)
-        correct = answers_match(
+        started = time.perf_counter()
+        error: str | None = None
+        try:
+            response = runner(example)
+            parsed_answer = extract_model_answer(response)
+            correct = answers_match(
+                parsed_answer,
+                example.expected,
+                task=example.task,
+                reference_answer=example.reference_answer,
+                example=example,
+                layout_dir=args.layout_dir.expanduser().resolve(),
+            )
+        except Exception as caught_error:
+            response = ""
+            parsed_answer = None
+            correct = False
+            error = f"{type(caught_error).__name__}: {caught_error}"
+        duration_seconds = time.perf_counter() - started
+        result = {
+            "index": index,
+            "line_number": example.line_number,
+            "id": example.example_id,
+            "task": example.task,
+            "source_layout": example.source_layout,
+            "expected": example.expected,
+            "reference_answer": example.reference_answer,
+            "parsed_answer": parsed_answer,
+            "correct": correct,
+            "formatting_failure": parsed_answer is None and error is None,
+            "response": response,
+            "error": error,
+            "duration_seconds": round(duration_seconds, 6),
+        }
+        results.append(result)
+        if output_path is not None:
+            write_evaluation_report(
+                output_path,
+                build_evaluation_report(
+                    args,
+                    path,
+                    len(input_examples),
+                    examples,
+                    results,
+                    started_at,
+                    "running",
+                ),
+            )
+        print_result(
+            index,
+            len(examples),
+            example,
+            response,
             parsed_answer,
-            example.expected,
-            task=example.task,
-            reference_answer=example.reference_answer,
-            example=example,
-            layout_dir=args.layout_dir.expanduser().resolve(),
+            correct,
+            duration_seconds,
+            error,
         )
-        correct_count += int(correct)
-        print_result(index, len(examples), example, response, parsed_answer, correct)
 
+    correct_count = sum(bool(result["correct"]) for result in results)
     score = correct_count / len(examples)
+    if output_path is not None:
+        write_evaluation_report(
+            output_path,
+            build_evaluation_report(
+                args,
+                path,
+                len(input_examples),
+                examples,
+                results,
+                started_at,
+                "complete",
+            ),
+        )
     print("\n" + "=" * 78)
     print("FINAL SCORE")
     print(f"Correct: {correct_count}/{len(examples)}")
     print(f"Score:   {score:.1%}")
+    if output_path is not None:
+        print(f"JSON:    {output_path}")
     print("=" * 78)
 
 
