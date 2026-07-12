@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import math
 import re
 import sys
 import urllib.error
@@ -13,6 +15,17 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+from shapely.geometry import LineString
+from shapely.validation import make_valid
+
+from .generate_questions import (
+    DEFAULT_LAYOUT_DIR,
+    entity_centroid,
+    label,
+    load_layout,
+    navigation_geometry,
+)
 
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_HF_MODEL = "mlx-community/Qwen3.5-4B-OptiQ-4bit"
@@ -28,6 +41,10 @@ class Example:
     example_id: str
     messages: list[dict[str, str]]
     expected: str
+    task: str
+    reference_answer: Any
+    source_layout: str | None
+    parameters: dict[str, Any]
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ollama-url", default="http://127.0.0.1:11434/api/chat"
     )
+    parser.add_argument("--layout-dir", type=Path, default=DEFAULT_LAYOUT_DIR)
     return parser.parse_args()
 
 
@@ -91,6 +109,18 @@ def iter_examples(path: Path) -> Iterator[Example]:
                 example_id=str(record.get("id", f"line-{line_number}")),
                 messages=extract_input_messages(record),
                 expected=extract_expected_answer(record),
+                task=str(record.get("task", "")),
+                reference_answer=record.get("reference_answer", record.get("answer")),
+                source_layout=(
+                    str(record["source_layout"])
+                    if record.get("source_layout") is not None
+                    else None
+                ),
+                parameters=(
+                    record["parameters"]
+                    if isinstance(record.get("parameters"), dict)
+                    else {}
+                ),
             )
 
 
@@ -117,16 +147,157 @@ def decimal_value(value: str) -> Decimal | None:
         return None
 
 
-def answers_match(actual: str | None, expected: str) -> bool:
+def parse_sequence(value: str) -> list[Any] | None:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError):
+            if value.strip().startswith("[") and value.strip().endswith("]"):
+                inner = value.strip()[1:-1].strip()
+                return (
+                    []
+                    if not inner
+                    else [item.strip(" '\"`") for item in inner.split(",")]
+                )
+            return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def discrete_frechet(
+    first: list[tuple[float, float]], second: list[tuple[float, float]]
+) -> float:
+    if not first or not second:
+        return math.inf
+    values = [[math.inf for _ in second] for _ in first]
+    for first_index, first_point in enumerate(first):
+        for second_index, second_point in enumerate(second):
+            distance = math.dist(first_point, second_point)
+            if first_index == 0 and second_index == 0:
+                values[first_index][second_index] = distance
+            elif first_index == 0:
+                values[first_index][second_index] = max(
+                    values[first_index][second_index - 1], distance
+                )
+            elif second_index == 0:
+                values[first_index][second_index] = max(
+                    values[first_index - 1][second_index], distance
+                )
+            else:
+                values[first_index][second_index] = max(
+                    min(
+                        values[first_index - 1][second_index],
+                        values[first_index - 1][second_index - 1],
+                        values[first_index][second_index - 1],
+                    ),
+                    distance,
+                )
+    return values[-1][-1]
+
+
+def parse_path(value: str | Any) -> list[tuple[float, float]] | None:
+    parsed = parse_sequence(value) if isinstance(value, str) else value
+    if not isinstance(parsed, list):
+        return None
+    try:
+        path = [tuple(float(coordinate) for coordinate in point) for point in parsed]
+    except (TypeError, ValueError):
+        return None
+    return path if all(len(point) == 2 for point in path) else None
+
+
+def candidate_path_is_valid(
+    example: Example, path: list[tuple[float, float]], layout_dir: Path
+) -> bool:
+    if example.source_layout is None or len(path) < 2:
+        return False
+    context = load_layout(layout_dir / example.source_layout)
+    entities = {label(entity): entity for entity in context.entities}
+    try:
+        first = entities[example.parameters["object_1"]]
+        second = entities[example.parameters["object_2"]]
+        clearance = float(example.parameters["clearance"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if math.dist(path[0], entity_centroid(first)) > 0.01:
+        return False
+    if math.dist(path[-1], entity_centroid(second)) > 0.01:
+        return False
+    navigable, start_space, goal_space = navigation_geometry(
+        context, first, second, clearance
+    )
+    tolerance = 0.002
+    if len(path) == 2:
+        return make_valid(start_space.union(goal_space)).buffer(tolerance).covers(
+            LineString(path)
+        )
+    segments = [
+        LineString([path[index], path[index + 1]])
+        for index in range(len(path) - 1)
+    ]
+    return bool(
+        start_space.buffer(tolerance).covers(segments[0])
+        and goal_space.buffer(tolerance).covers(segments[-1])
+        and all(
+            navigable.buffer(tolerance).covers(segment)
+            for segment in segments[1:-1]
+        )
+    )
+
+
+def answers_match(
+    actual: str | None,
+    expected: str,
+    task: str = "",
+    reference_answer: Any = None,
+    example: Example | None = None,
+    layout_dir: Path | None = None,
+) -> bool:
     if actual is None:
         return False
 
     actual_number = decimal_value(actual)
-    expected_number = decimal_value(expected)
+    expected_number = decimal_value(
+        str(reference_answer if reference_answer is not None else expected)
+    )
     if actual_number is not None and expected_number is not None:
-        decimal_places = max(0, -expected_number.as_tuple().exponent)
-        quantum = Decimal(1).scaleb(-decimal_places)
-        return actual_number.quantize(quantum) == expected_number.quantize(quantum)
+        if task in {"pair_distance", "view_angle", "repositioning", "max_box"}:
+            tolerance = Decimal("0.02")
+        elif task == "free_space":
+            tolerance = Decimal("0.05")
+        else:
+            decimal_places = max(0, -expected_number.as_tuple().exponent)
+            quantum = Decimal(1).scaleb(-decimal_places)
+            return actual_number.quantize(quantum) == expected_number.quantize(quantum)
+        absolute_error = abs(actual_number - expected_number)
+        if abs(expected_number) <= Decimal("0.001"):
+            return absolute_error <= Decimal("0.001")
+        return absolute_error / abs(expected_number) <= tolerance
+
+    if task == "visibility":
+        actual_values = parse_sequence(actual)
+        expected_values = (
+            reference_answer
+            if isinstance(reference_answer, list)
+            else parse_sequence(expected)
+        )
+        return bool(
+            actual_values is not None
+            and expected_values is not None
+            and {str(value).casefold() for value in actual_values}
+            == {str(value).casefold() for value in expected_values}
+        )
+
+    if task == "shortest_path" and example is not None and layout_dir is not None:
+        actual_path = parse_path(actual)
+        expected_path = parse_path(reference_answer)
+        return bool(
+            actual_path is not None
+            and expected_path is not None
+            and candidate_path_is_valid(example, actual_path, layout_dir)
+            and discrete_frechet(actual_path, expected_path) <= 0.6
+        )
 
     def normalize(value: str) -> str:
         return " ".join(value.casefold().strip().split())
@@ -258,7 +429,14 @@ def main() -> None:
         )
         response = runner(example)
         parsed_answer = extract_model_answer(response)
-        correct = answers_match(parsed_answer, example.expected)
+        correct = answers_match(
+            parsed_answer,
+            example.expected,
+            task=example.task,
+            reference_answer=example.reference_answer,
+            example=example,
+            layout_dir=args.layout_dir.expanduser().resolve(),
+        )
         correct_count += int(correct)
         print_result(index, len(examples), example, response, parsed_answer, correct)
 

@@ -13,6 +13,8 @@ dependencies = [
 [project.scripts]
 download-floorplan-qa = "floorplan_qa.download_dataset:main"
 checkout-fpqa-tooling = "floorplan_qa.checkout_tooling:main"
+generate-floorplan-qa = "floorplan_qa.generate_questions:main"
+evaluate-floorplan-qa-generation = "floorplan_qa.quality_metrics:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -34,25 +34,54 @@ other than `main`.
 
 ## Generate training questions
 
-Generate a requested number of deterministic QA examples from all eight
-FloorplanQA task families. Task types are balanced in shuffled blocks, and the
-seed controls layout order, task order, and task parameters:
+Generate all eight deterministic QA tasks for each requested layout. Layouts
+are drawn by a seeded uniform shuffle over the complete released corpus; the
+generator does not force room-source or answer-class balance:
 
 ```shell
 ./scripts/generate_questions.sh 20 1
 ```
 
-The command writes `datasets/train-qa/questions.jsonl`, replacing that file on
-each run. If the seed is omitted, it defaults to `0`. Each record includes its
-task parameters, typed reference answer, prompt messages, and solver provenance.
-The first implementation follows the paper's task semantics while marking
-approximate solvers as `experimental-v1`.
+This selects 20 layouts and writes 160 records to
+`datasets/train-qa/questions.jsonl`, replacing that file on each run. It also
+writes `generation-report.json` with complete-layout yield and observed source
+counts. If the seed is omitted, it defaults to `0`.
+
+Each record includes task parameters, a typed reference answer, fixed-template
+prompt messages, input-validation results, solver settings, convergence data,
+and version provenance. The `paper-v2` implementation uses continuous
+first-collision repositioning, configuration-space placement with exact
+witnesses or certified negatives, deterministic global Max Box search, and
+0.15 m-clearance grid A* for shortest paths. Visibility intentionally uses
+actual polygon intersections rather than paper-style bounding boxes.
+
+## Evaluate generation quality
+
+Generate the same sample twice, then compare it while revalidating every
+reference answer and geometry witness:
+
+```shell
+./scripts/generate_questions.sh 20 7
+cp datasets/train-qa/questions.jsonl /tmp/questions-first.jsonl
+./scripts/generate_questions.sh 20 7
+./scripts/evaluate_generation.sh \
+  datasets/train-qa/questions.jsonl \
+  /tmp/questions-first.jsonl
+```
+
+The hard gates are documented in
+[`question-gen.md`](question-gen.md#quality-metrics-and-validation).
+The evaluator also reports the unforced room-source and Placement-answer
+distributions as advisory measurements.
 
 ## Evaluate local Qwen 3.5 4B models
 
 Both evaluators accept a QA JSONL path, remove reference/assistant messages from
 each record, run one example at a time, print a per-example verdict, and finish
-with an aggregate score.
+with an aggregate score. Scoring follows the paper: 2% relative error for
+scalar tasks, 5% for free space, exact Boolean Placement, set-equality
+Visibility, and collision-free shortest paths within 0.6 m discrete Frechet
+distance of the reference.
 
 With Ollama running and `qwen3.5:4b` available:
 
