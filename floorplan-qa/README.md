@@ -69,7 +69,8 @@ cp datasets/train-qa/questions.jsonl /tmp/questions-first.jsonl
   /tmp/questions-first.jsonl
 ```
 
-The hard gates are documented in [`generation-quality.md`](generation-quality.md).
+The hard gates are documented in
+[`question-gen.md`](question-gen.md#quality-metrics-and-validation).
 The evaluator also reports the unforced room-source and Placement-answer
 distributions as advisory measurements.
 
