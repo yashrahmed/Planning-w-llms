@@ -222,6 +222,9 @@ resources/corpus/
 # Downloaded FloorplanQA dataset
 floorplan-qa/datasets/
 
+# Keep local evaluator result reports out of pull requests.
+floorplan-qa/datasets/evaluations/*.json
+
 # Materialized upstream FloorplanQA tooling (not a nested Git repository)
 floorplan-qa/fpqa-tooling/
 
