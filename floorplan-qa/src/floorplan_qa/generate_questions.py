@@ -1445,7 +1445,7 @@ def main() -> None:
         "records": len(records),
         "considered_layouts": considered_layouts,
         "skipped_layouts": len(failures),
-        "candidate_success_rate": emitted_layouts / considered_layouts,
+        "complete_layout_yield": emitted_layouts / considered_layouts,
         "task_counts": counts,
         "layout_source_counts": source_counts,
         "layout_selection": "sha256-uniform-all-layouts",
@@ -1457,7 +1457,7 @@ def main() -> None:
         encoding="utf-8",
     )
     print(
-        f"Candidate success rate: {generation_report['candidate_success_rate']:.1%} "
+        f"Complete layout yield: {generation_report['complete_layout_yield']:.1%} "
         f"({emitted_layouts}/{considered_layouts})"
     )
     print(f"Generation report: {report_path}")

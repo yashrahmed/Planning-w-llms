@@ -44,7 +44,7 @@ generator does not force room-source or answer-class balance:
 
 This selects 20 layouts and writes 160 records to
 `datasets/train-qa/questions.jsonl`, replacing that file on each run. It also
-writes `generation-report.json` with candidate success and observed source
+writes `generation-report.json` with complete-layout yield and observed source
 counts. If the seed is omitted, it defaults to `0`.
 
 Each record includes task parameters, a typed reference answer, fixed-template

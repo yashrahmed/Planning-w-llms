@@ -34,7 +34,7 @@ from .generate_questions import (
 )
 
 RATE_THRESHOLDS = {
-    "generation_candidate_success_rate": 0.95,
+    "complete_layout_yield": 0.95,
     "layout_completeness_rate": 1.0,
     "schema_validity_rate": 1.0,
     "prompt_validity_rate": 1.0,
@@ -372,8 +372,8 @@ def main() -> None:
     generation_report_path = input_path.parent / GENERATION_REPORT_FILENAME
     if generation_report_path.is_file():
         generation_report = json.loads(generation_report_path.read_text(encoding="utf-8"))
-        metrics["generation_candidate_success_rate"] = float(
-            generation_report["candidate_success_rate"]
+        metrics["complete_layout_yield"] = float(
+            generation_report["complete_layout_yield"]
         )
     unique_layouts = {
         (record["source_layout"], record["layout_id"]): record

@@ -8,7 +8,7 @@ or forced.
 
 | Metric | Threshold | Meaning |
 | --- | ---: | --- |
-| Candidate generation success | at least 95% | Selected layouts that emit a complete eight-task bundle |
+| Complete layout yield | at least 95% | Considered layouts that emit a complete eight-task bundle |
 | Layout completeness | 100% | Exactly one record for each of the eight tasks per emitted layout |
 | Schema validity | 100% | Required typed fields, messages, and provenance are present |
 | Prompt validity | 100% | Fixed template, serialized layout, and strict final-answer contract agree |
@@ -32,8 +32,8 @@ Attempt 4 evaluated 800 records from 100 uniformly sampled layouts using seed
 `20260712`. The same sample was generated twice and the evaluator independently
 regenerated all records.
 
-All hard metrics reached 100%, except candidate generation success, which was
-99.0% (100 emitted layouts from 101 candidates) and exceeded its 95% threshold.
+All hard metrics reached 100%, except complete layout yield, which was 99.0%
+(100 emitted layouts from 101 considered layouts) and exceeded its 95% threshold.
 Max Box convergence used a 2% relative-improvement threshold.
 
 Observed, unforced distributions:
