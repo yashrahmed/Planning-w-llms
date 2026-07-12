@@ -89,6 +89,21 @@ With Ollama running and `qwen3.5:4b` available:
 ./scripts/evaluate_ollama.sh datasets/train-qa/questions.jsonl
 ```
 
+For a reproducible batch evaluation, generate an 80-layout pool and uniformly
+sample 150 questions with a seed (default `0`):
+
+```shell
+caffeinate -dimsu ./scripts/evaluate_ollama_random.sh 0
+```
+
+The batch uses `qwen3.5:4b` with temperature zero, thinking disabled, and a
+768-token output budget per question. It checkpoints a structured JSON report
+after every response at `datasets/evaluations/qwen3.5-4b-seed-<seed>.json`, so a
+partial run remains inspectable. Pass a second argument to choose another JSON
+path. `MODEL`, `SAMPLE_SIZE`, `POOL_LAYOUTS`, and `MAX_TOKENS` environment
+variables are available for controlled smoke tests or alternate runs; the
+defaults perform the requested 150-question evaluation.
+
 On Apple silicon, run the Hugging Face-hosted MLX-LM 4-bit conversion with:
 
 ```shell
