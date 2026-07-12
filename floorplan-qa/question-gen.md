@@ -374,6 +374,6 @@ in place. It should provide:
 12. Property tests covering polygon vertex order, overlaps, boundary contact,
     soft-covering filters, solver witnesses, and deterministic regeneration.
 
-These are design corrections only. They do not describe the behavior of the
-current experimental generator until the corresponding implementation work is
-completed and verified.
+These corrections are implemented by the self-contained `paper-v2` generator
+under `src/floorplan_qa/`. Its acceptance metrics and the 100-layout validation
+run are documented in [`generation-quality.md`](generation-quality.md).

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "Usage: $0 <number-of-examples> [seed]" >&2
+  echo "Usage: $0 <number-of-layouts> [seed]" >&2
   exit 2
 fi
 
@@ -24,5 +24,5 @@ PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${PROJECT_DIR}"
 uv run python -m floorplan_qa.generate_questions \
-  --num-examples "$1" \
+  --num-layouts "$1" \
   --seed "${SEED}"

@@ -14,30 +14,32 @@ pair-distance questions in `datasets/train-qa/questions.jsonl`.
 
 The evaluator retained only system and user messages from each JSONL record, so
 the reference assistant response was never passed to the model. Both runs used
-greedy generation with thinking disabled and a 4,096-token output limit. Numeric
-answers were compared at the three-decimal precision specified by the dataset.
+greedy generation with thinking disabled and a 4,096-token output limit. The
+original report compared numeric answers at exact three-decimal precision. The
+current evaluator follows the paper's relative-error thresholds, so the table
+below also rescored the recorded outputs without rerunning either model.
 
 ## Scores
 
-| Backend | Correct | Score |
+| Backend | Legacy exact-decimal score | Paper-threshold score |
 | --- | ---: | ---: |
-| Ollama | 4/5 | 80% |
-| Hugging Face with MLX-LM | 4/5 | 80% |
+| Ollama | 4/5 (80%) | 5/5 (100%) |
+| Hugging Face with MLX-LM | 4/5 (80%) | 4/5 (80%) |
 
 ## Per-example results
 
 | Example | Expected | Ollama | Hugging Face/MLX | Result |
 | --- | ---: | ---: | ---: | --- |
 | `pair-distance-bedroom-0` | 0.347 | 0.347 | 0.347 | Both correct |
-| `pair-distance-hssd-0` | 3.255 | 3.210 | No final answer | Both incorrect |
+| `pair-distance-hssd-0` | 3.255 | 3.210 | No final answer | Ollama passes 2% tolerance; MLX fails formatting |
 | `pair-distance-kitchen-0` | 2.219 | 2.219 | 2.219 | Both correct |
 | `pair-distance-living_room-0` | 2.007 | 2.007 | 2.007 | Both correct |
 | `pair-distance-bedroom-1` | 2.147 | 2.147 | 2.147 | Both correct |
 
 ## Failure analysis
 
-Both models failed on the same HSSD example, which uses irregular polygons, but
-they failed differently.
+Both models struggled on the same HSSD example, which uses irregular polygons,
+but only the MLX result fails the paper-style scorer.
 
 ### Ollama
 
@@ -63,7 +65,7 @@ be treated as a formal performance benchmark.
 
 ## Conclusion
 
-Both raw 4B baselines solve the rectangular cases reliably but struggle with
-area-weighted centroids for irregular polygons. A deterministic polygon
-centroid tool is the clearest first addition for a stronger FloorplanQA
-harness.
+Both raw 4B baselines solve the rectangular cases reliably but show weaker
+reasoning on area-weighted centroids for irregular polygons. Under paper-style
+scoring, Ollama's error remains within tolerance while the MLX run fails because
+it never emits the required final-answer line.
