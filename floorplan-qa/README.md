@@ -112,3 +112,29 @@ On Apple silicon, run the Hugging Face-hosted MLX-LM 4-bit conversion with:
 
 Pass `--thinking` to either command to enable Qwen's thinking mode. Use
 `--model` or `--max-tokens` after the JSONL path to override the defaults.
+
+## Run the iterative Ollama tool experiment
+
+Run the reproducible fixed-seed tool-design loop while preventing macOS sleep:
+
+```shell
+caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh
+```
+
+The command first ensures that `datasets/train-qa/questions.jsonl` contains 50
+examples (seed `1`). It then samples the same 25 questions from the 640-question
+seed-`0` evaluation pool on every iteration, limits total generated tokens across
+all agent turns to 2,500 per question, and stops after five iterations or as soon
+as all 25 questions pass.
+
+Each cumulative tool version is driven by feedback from the preceding result:
+
+1. entity search, entity inspection, and pair measurements;
+2. exact free-space/largest-box measurements and object sliding;
+3. arbitrary-rotation placement testing and clearance-aware shortest paths;
+4. a typed task router, only if failures remain;
+5. a current-question geometry solver, only as a final fallback.
+
+Results, tool traces, per-iteration feedback, and the final summary are written
+to `experiments/tool-loop/`. The completed seed-`0` experiment stopped at
+iteration 3 with scores of 8/25, 18/25, and 25/25.
