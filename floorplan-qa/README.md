@@ -113,40 +113,109 @@ On Apple silicon, run the Hugging Face-hosted MLX-LM 4-bit conversion with:
 Pass `--thinking` to either command to enable Qwen's thinking mode. Use
 `--model` or `--max-tokens` after the JSONL path to override the defaults.
 
-## Run the iterative Ollama tool experiment
+## Ollama tool experiment
 
-Run the reproducible fixed-seed tool-design loop while preventing macOS sleep:
+Generated checkpoints, tool traces, feedback, and summaries are written below
+`experiments/`. That directory is intentionally ignored by Git. This README is
+the canonical after-action record for committed experiment results.
 
-```shell
-caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh
-```
+### Protocol and data boundary
 
-The command first ensures that `datasets/train-qa/questions.jsonl` contains 50
-examples (seed `1`). It then samples the same 25 questions from the 640-question
-seed-`0` evaluation pool on every iteration, limits total generated tokens across
-all agent turns to 2,500 per question, and stops after three iterations or as soon
-as all 25 questions pass.
+Both tool evaluations used `qwen3.5:4b` through Ollama with thinking disabled,
+temperature `0`, seed `0`, and a limit of 2,500 generated tokens per question
+across all agent turns. Questions were sampled uniformly without replacement
+from the fixed 640-question seed-`0` evaluation pool. The training generator
+retained its existing 50 examples selected with seed `1`.
 
-Each tool version is driven by feedback from the preceding result:
+The leak-free evaluator enforces this boundary:
 
-1. entity search, entity inspection, and pair measurements;
-2. exact free-space/largest-box measurements and object sliding;
-3. arbitrary-rotation placement testing and clearance-aware shortest paths.
+| Component | Available data |
+|---|---|
+| Model | User-authored question and answer-format instructions, with raw layout JSON removed |
+| Tool runtime | Source layout path, layout directory, and evaluation seed |
+| Post-response scorer only | Task label, structured parameters, expected answer, and reference answer |
 
-The model sees only the user-authored question with the raw layout JSON removed.
-The tool runtime receives only the source layout path, layout directory, and
-evaluation seed. It never receives the example task, parameters, expected
-answer, or reference answer; Qwen must select a specialist tool and supply every
-argument from the question text.
+Qwen must infer the requested operation and supply every tool argument from the
+visible question. The tool runtime does not hold the full evaluation example.
 
-Results, tool traces, per-iteration feedback, and the final summary are written
-to `experiments/tool-loop/`. The completed seed-`0` experiment stopped at
-iteration 3 with scores of 8/25, 18/25, and 25/25.
+### Retained v3 tools
 
-## Continue the tool experiment on 200 questions
+| Tool | Description |
+|---|---|
+| `search_entities` | Search object, door, and window labels in the current floorplan. |
+| `inspect_entity` | Get exact centroid, bounds, polygon area, and kind for one floorplan entity. |
+| `measure_pair` | Measure two entity centroids and their relationships: distance, angle from north, and line intersections. |
+| `measure_space` | Measure room area, non-occupied floor area, or the largest obstacle-free rectangle. |
+| `slide_object` | Measure how far an object can translate before first contact with a blocker or room boundary. |
+| `test_placement` | Test whether a rectangle can fit at any rotation in free floor space. |
+| `find_shortest_path` | Find a valid shortest waypoint path between entity centroids with obstacle clearance. |
 
-The larger experiment starts from the previous winning v3 specialist toolset
-instead of repeating the v1 and v2 baselines:
+The system prompt is:
+
+> You are a FloorplanQA tool agent. Infer the task and all arguments only from
+> the user's question. Call the single most relevant geometry tool immediately;
+> never do polygon arithmetic yourself. After a tool returns, use its computed
+> values to answer in the user's requested format. You may call another tool
+> only when the first tool cannot answer the question.
+
+### Historical 25-question tool evolution
+
+This prototype loop predates the stricter structural data boundary above. It is
+retained here to document how the specialist toolset evolved, not as the final
+accuracy measurement.
+
+| Version | Change | Correct | Formatting failures | Runtime | Generated tokens |
+|---|---|---:|---:|---:|---:|
+| v1 | Entity search, inspection, and pair measurements | 8/25 | 15 | 913.6 s | 15,239 |
+| v2 | Added space measurement and object sliding | 18/25 | 7 | 405.5 s | 6,036 |
+| v3 | Added rotated placement and clearance-aware paths | 25/25 | 0 | 173.5 s | 1,990 |
+
+V1 was perfect on pair-distance, view-angle, and visibility questions but lacked
+dedicated tools for most other tasks. V2 fixed free-space, largest-box, and
+repositioning questions; its seven remaining failures were placement and
+shortest-path questions. V3 added those two missing capabilities and answered
+the 25-question prototype sample completely.
+
+### Leak-free 200-question v3 evaluation
+
+The final retained evaluation reran only v3 on 200 fixed-seed questions after
+removing task-derived prompt hints and severing the runtime's access to task,
+parameter, expected-answer, and reference-answer metadata.
+
+| Task | Correct |
+|---|---:|
+| Free space | 28/28 |
+| Largest box | 26/26 |
+| Pair distance | 26/26 |
+| Placement | 23/23 |
+| Repositioning | 22/22 |
+| Shortest path | 25/25 |
+| View angle | 21/21 |
+| Visibility | 14/29 |
+| **Overall** | **185/200 (92.5%)** |
+
+The run generated 46,461 tokens and took 2,341.1 seconds, averaging 11.71
+seconds per question. There were no runtime errors or geometry-tool exceptions.
+
+All 15 failures were visibility questions that exhausted the eight-tool-call
+loop without emitting a parsable final answer:
+
+| Failure mode | Count | What happened |
+|---|---:|---|
+| Never called `measure_pair` | 9 | Qwen spent every call on entity search and inspection. |
+| Chose the wrong solver | 1 | Qwen called `find_shortest_path` for a line-intersection question. |
+| Called `measure_pair` with the wrong entity arguments | 2 | The tool ran correctly for a pair that did not match the requested endpoints. |
+| Received the exact correct `measure_pair` result but continued | 3 | Qwen kept searching or inspecting and never formatted the returned visibility answer. |
+
+Across failed questions, Qwen made 120 tool calls: 93 entity inspections, 21
+entity searches, five pair measurements, and one shortest-path call. Failures
+averaged 936.9 generated tokens and reached a maximum of 1,864. The failure
+cluster therefore points to tool discoverability, argument selection, and
+stopping behavior rather than the deterministic geometry implementation.
+
+### Reproduce the retained evaluation
+
+Run the 200-question v3 evaluation while preventing macOS sleep:
 
 ```shell
 caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh \
@@ -158,10 +227,5 @@ caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh \
   --output-dir experiments/tool-loop-200
 ```
 
-Only the v3 specialist toolset is retained for the 200-question evaluation. The
-leak-free rerun scored 185/200 (92.5%): all 171 questions across free-space,
-largest-box, pair-distance, placement, repositioning, shortest-path, and
-view-angle tasks passed; visibility scored 14/29. All 15 failures were answer
-formatting failures after Qwen searched or inspected entities instead of using
-and stopping on the pair-relationship result. Artifacts are written to
-`experiments/tool-loop-200/`.
+The generated reports remain available locally for inspection but are excluded
+from commits by `floorplan-qa/experiments/` in the repository `.gitignore`.
