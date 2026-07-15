@@ -51,6 +51,8 @@ REQUIRED_FIELDS = {
     "task",
     "layout_id",
     "room_type",
+    "split",
+    "layout_file",
     "source_layout",
     "parameters",
     "question",
@@ -96,6 +98,17 @@ def record_schema_valid(record: dict[str, Any]) -> bool:
         return False
     if not isinstance(record["parameters"], dict):
         return False
+    if record["split"] not in ("train", "test", "val"):
+        return False
+    source_layout = record.get("source_layout")
+    if not isinstance(source_layout, str):
+        return False
+    expected_layout_file = (
+        f"{Path(source_layout).parent.name}-{record['layout_id']}-"
+        f"{record['split']}.json"
+    )
+    if record["layout_file"] != expected_layout_file:
+        return False
     provenance = record["provenance"]
     if not isinstance(provenance, dict):
         return False
@@ -116,8 +129,12 @@ def record_prompt_valid(record: dict[str, Any]) -> bool:
     messages = record.get("messages")
     if not isinstance(question, str) or not isinstance(messages, list):
         return False
+    layout_reference = (
+        f"Room layout can be found in file : {record.get('layout_file')}"
+    )
     return bool(
-        "Room layout:\n{" in question
+        layout_reference in question
+        and "Room layout:\n{" not in question
         and "*Final answer*: <answer>" in question
         and messages[1].get("content") == question
         and messages[2].get("content")
@@ -308,8 +325,15 @@ def assess(
             record["task"],
             seed,
             grid_resolution=grid_resolution,
+            split=str(record["split"]),
         )
-        deterministic_fields = ("parameters", "answer", "reference_answer", "question")
+        deterministic_fields = (
+            "parameters",
+            "answer",
+            "reference_answer",
+            "question",
+            "layout_file",
+        )
         same = all(regenerated[field] == record[field] for field in deterministic_fields)
         reproducible += int(same)
         if not same:
