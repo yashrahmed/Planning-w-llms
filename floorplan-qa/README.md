@@ -44,8 +44,18 @@ generator does not force room-source or answer-class balance:
 
 This selects 20 layouts and writes 160 records to
 `datasets/train-qa/questions.jsonl`, replacing that file on each run. It also
-writes `generation-report.json` with complete-layout yield and observed source
-counts. If the seed is omitted, it defaults to `0`.
+writes one layout JSON per selected layout in that same directory, using names
+such as `living_room-249-train.json`, and a `generation-report.json` with
+complete-layout yield and observed source counts. Questions contain the exact
+reference `Room layout can be found in file : <layout-file>.json` instead of
+embedding the layout JSON. If the seed is omitted, it defaults to `0`.
+
+Pass a third argument of `test` or `val` when generating another split; the
+split is included in each layout filename:
+
+```shell
+./scripts/generate_questions.sh 20 7 val
+```
 
 Each record includes task parameters, a typed reference answer, fixed-template
 prompt messages, input-validation results, solver settings, convergence data,
@@ -77,9 +87,13 @@ distributions as advisory measurements.
 ## V1: evaluate with the full raw context
 
 V1 is intentionally a single-response, tool-free baseline. Each record's
-complete system and user messages are sent directly to the model, including the
-full `Room layout:` JSON. The evaluator does not compact the prompt, preload a
-hidden layout runtime, advertise tools, accept tool calls, or run an agent loop.
+complete system and user messages are sent directly to the model. For legacy
+records this includes the full embedded `Room layout:` JSON. Newly generated
+records instead contain the layout-file reference described above; the current
+V1 evaluator does not open that file for the model. Adding explicit file access
+is a separate evaluator change. The evaluator does not compact the prompt,
+preload a hidden layout runtime, advertise tools, accept tool calls, or run an
+agent loop.
 
 ### Why the evaluator was reset
 

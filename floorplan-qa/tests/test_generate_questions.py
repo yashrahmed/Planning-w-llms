@@ -13,9 +13,11 @@ from floorplan_qa.generate_questions import (
     entity_centroid,
     generate_record,
     label,
+    layout_filename,
     layout_paths,
     load_layout,
     maximum_slide_distance,
+    write_layout_files,
 )
 from floorplan_qa.quality_metrics import RATE_THRESHOLDS, assess
 
@@ -102,6 +104,37 @@ class GeneratorTests(unittest.TestCase):
         for metric, threshold in RATE_THRESHOLDS.items():
             if metric in metrics:
                 self.assertGreaterEqual(metrics[metric], threshold, metric)
+
+    def test_question_references_separate_split_layout_file(self) -> None:
+        context = load_layout(self.layout_path)
+        record = generate_record(
+            context, self.layout_dir, "pair_distance", seed=19, split="train"
+        )
+
+        self.assertEqual(record["layout_file"], "kitchen-0-train.json")
+        self.assertEqual(record["split"], "train")
+        self.assertTrue(record["question"].startswith("Given the layout of the room, "))
+        self.assertNotIn("Given the kitchen layout", record["question"])
+        self.assertIn(
+            "Room layout can be found in file : kitchen-0-train.json",
+            record["question"],
+        )
+        self.assertNotIn("Room layout:\n{", record["question"])
+        self.assertNotIn(
+            json.dumps(sample_layout(), separators=(",", ":")), record["question"]
+        )
+        self.assertEqual(record["messages"][1]["content"], record["question"])
+
+    def test_layout_files_are_written_beside_questions(self) -> None:
+        context = load_layout(self.layout_path)
+        output_dir = Path(self.temporary_directory.name) / "train-qa"
+
+        filenames = write_layout_files([context], output_dir, "val")
+
+        self.assertEqual(filenames, ["kitchen-0-val.json"])
+        layout_path = output_dir / filenames[0]
+        self.assertEqual(json.loads(layout_path.read_text()), sample_layout())
+        self.assertEqual(layout_filename(context, "test"), "kitchen-0-test.json")
 
     def test_released_numeric_regressions_when_dataset_is_available(self) -> None:
         released_root = (

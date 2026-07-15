@@ -24,6 +24,7 @@ DEFAULT_LAYOUT_DIR = PACKAGE_ROOT / "datasets" / "FloorplanQA-Layouts" / "layout
 DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "datasets" / "train-qa"
 OUTPUT_FILENAME = "questions.jsonl"
 GENERATION_REPORT_FILENAME = "generation-report.json"
+DATASET_SPLITS = ("train", "test", "val")
 SOLVER_VERSION = "paper-v2"
 GEOMETRY_TOLERANCE = 1e-7
 REPOSITION_TOLERANCE = 1e-5
@@ -153,6 +154,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--layout-dir", type=Path, default=DEFAULT_LAYOUT_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--split",
+        choices=DATASET_SPLITS,
+        default="train",
+        help="Dataset split included in emitted layout filenames (default: train).",
+    )
     parser.add_argument(
         "--grid-resolution",
         type=float,
@@ -1303,13 +1310,16 @@ TASK_GENERATORS = {
 }
 
 
-def build_question(context: LayoutContext, result: TaskResult) -> str:
-    room_json = json.dumps(
-        context.layout, ensure_ascii=False, separators=(",", ":")
-    )
+def layout_filename(context: LayoutContext, split: str) -> str:
+    if split not in DATASET_SPLITS:
+        raise ValueError(f"unsupported dataset split: {split}")
+    return f"{context.source_group}-{context.layout_id}-{split}.json"
+
+
+def build_question(result: TaskResult, room_layout_file: str) -> str:
     return (
-        f"Given the {context.room_type} layout below in JSON, {result.instruction}.\n\n"
-        f"Room layout:\n{room_json}\n\n"
+        f"Given the layout of the room, {result.instruction}.\n\n"
+        f"Room layout can be found in file : {room_layout_file}\n\n"
         "Briefly show the geometric steps used. If required data is invalid or "
         "missing, return '*Final answer*: ERROR'. Otherwise put the answer on "
         "the last line exactly as:\n"
@@ -1324,6 +1334,7 @@ def generate_record(
     task: str,
     seed: int,
     grid_resolution: float = DEFAULT_GRID_RESOLUTION,
+    split: str = "train",
 ) -> dict[str, Any]:
     rng = stable_rng(seed, context.source_group, context.layout_id, task)
     result = (
@@ -1331,7 +1342,8 @@ def generate_record(
         if task == "shortest_path"
         else TASK_GENERATORS[task](context, rng)
     )
-    question = build_question(context, result)
+    room_layout_file = layout_filename(context, split)
+    question = build_question(result, room_layout_file)
     system_prompt = (
         "Use exact polygon geometry where possible. Always provide a final answer "
         "and do not return ERROR merely because the computation is difficult."
@@ -1341,6 +1353,8 @@ def generate_record(
         "task": task,
         "layout_id": context.layout_id,
         "room_type": context.room_type,
+        "split": split,
+        "layout_file": room_layout_file,
         "source_layout": str(context.source_path.relative_to(layout_dir)),
         "parameters": result.parameters,
         "question": question,
@@ -1350,7 +1364,7 @@ def generate_record(
             "global_seed": seed,
             "solver_version": SOLVER_VERSION,
             "compatibility_mode": "paper",
-            "prompt_version": "fixed-template-v2",
+            "prompt_version": "fixed-template-v4-generic-layout-file",
             "layout_selection": "sha256-uniform-all-layouts",
             "task_selection": "all-eight-per-layout",
             "solver": result.solver_metadata,
@@ -1375,6 +1389,21 @@ def write_records(records: list[dict[str, Any]], output_path: Path) -> None:
             output_file.write("\n")
 
 
+def write_layout_files(
+    contexts: list[LayoutContext], output_dir: Path, split: str
+) -> list[str]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filenames: list[str] = []
+    for context in contexts:
+        filename = layout_filename(context, split)
+        (output_dir / filename).write_text(
+            json.dumps(context.layout, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        filenames.append(filename)
+    return filenames
+
+
 def main() -> None:
     args = parse_args()
     source_dir = args.layout_dir.expanduser().resolve()
@@ -1389,6 +1418,7 @@ def main() -> None:
 
     paths = layout_paths(source_dir, args.seed)
     records: list[dict[str, Any]] = []
+    contexts: list[LayoutContext] = []
     failures: list[str] = []
     emitted_layouts = 0
     for source_path in paths:
@@ -1403,6 +1433,7 @@ def main() -> None:
                     task,
                     args.seed,
                     grid_resolution=args.grid_resolution,
+                    split=args.split,
                 )
                 for task in TASKS
             ]
@@ -1410,6 +1441,7 @@ def main() -> None:
             failures.append(f"{source_path}: {error}")
             continue
         records.extend(layout_records)
+        contexts.append(context)
         emitted_layouts += 1
 
     if emitted_layouts != args.num_layouts:
@@ -1420,6 +1452,7 @@ def main() -> None:
         )
 
     output_path = output_dir / OUTPUT_FILENAME
+    emitted_layout_files = write_layout_files(contexts, output_dir, args.split)
     write_records(records, output_path)
     counts = {task: sum(record["task"] == task for record in records) for task in TASKS}
     print(
@@ -1440,6 +1473,7 @@ def main() -> None:
     considered_layouts = emitted_layouts + len(failures)
     generation_report = {
         "seed": args.seed,
+        "split": args.split,
         "requested_layouts": args.num_layouts,
         "emitted_layouts": emitted_layouts,
         "records": len(records),
@@ -1449,6 +1483,7 @@ def main() -> None:
         "task_counts": counts,
         "layout_source_counts": source_counts,
         "layout_selection": "sha256-uniform-all-layouts",
+        "layout_files": emitted_layout_files,
         "failures": failures,
     }
     report_path = output_dir / GENERATION_REPORT_FILENAME

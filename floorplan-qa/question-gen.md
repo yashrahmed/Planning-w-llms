@@ -289,11 +289,14 @@ layout with an error relevant to a task should not produce that task's record.
 
 ## Prompt and output construction
 
-The fixed prompt templates live in
+The original fixed prompt templates live in
 [`fpqa-tooling/src/evaluation/questions.py`](fpqa-tooling/src/evaluation/questions.py).
-Each template inserts the room type, complete serialized layout, and
-task-specific variables such as object labels, dimensions, direction, or
-clearance.
+The local generator keeps their task-specific variables such as object labels,
+dimensions, direction, and clearance, but separates the serialized layout from
+the question. The layout file is emitted beside `questions.jsonl` with a
+collision-safe `<source>-<layout_id>-<split>.json` name. The question contains
+`Room layout can be found in file : <filename>` and does not embed the layout
+JSON.
 
 Every generated record should contain at least:
 
@@ -302,6 +305,8 @@ Every generated record should contain at least:
   "id": "<task>-<source>-<layout_id>",
   "layout_id": "<layout id>",
   "room_type": "<room type>",
+  "split": "train",
+  "layout_file": "<source>-<layout_id>-train.json",
   "task": "<task name>",
   "parameters": {},
   "question": "<rendered prompt>",
