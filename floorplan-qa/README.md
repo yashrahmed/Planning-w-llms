@@ -81,6 +81,34 @@ complete system and user messages are sent directly to the model, including the
 full `Room layout:` JSON. The evaluator does not compact the prompt, preload a
 hidden layout runtime, advertise tools, accept tool calls, or run an agent loop.
 
+### Why the evaluator was reset
+
+The previously merged experiment used the v3 specialist-tool evaluator:
+
+| Aspect | Previous merged state |
+|---|---|
+| Model input | A compacted question with the raw layout JSON removed |
+| Layout setup | The host read `example.source_layout`, loaded that JSON into `FloorplanToolRuntime`, and bound the correct layout before the first model call |
+| Tools | `search_entities`, `inspect_entity`, `measure_pair`, `measure_space`, `slide_object`, `test_placement`, and `find_shortest_path` |
+| Agent loop | Up to eight model turns sharing a 2,500-generated-token budget |
+| Recorded result | 185/200 on the fixed-seed 200-question sample; all 15 failures were visibility questions |
+
+The runtime did not receive the expected answer, but it did receive the hidden
+`source_layout` selection. Consequently, the model never had to identify, open,
+or parse the floorplan. It only selected geometry operations against a plan the
+evaluator had already chosen and loaded. That is a reasonable abstraction for
+an application with a visibly active document, but the evaluated interaction
+did not provide such an application state to the model or user.
+
+The 185/200 score therefore measured tool routing and argument selection on a
+pre-bound floorplan, not end-to-end FloorplanQA behavior. V1 removes that hidden
+pre-binding: the complete floorplan is explicit model input, the model receives
+no tools, and scorer-only metadata is used only after its single response.
+
+Earlier v4-v6 variants were already absent from the merged state. In particular,
+v6's 200/200 result had been rejected because it used hidden task and parameter
+metadata and functioned as an oracle rather than an agent evaluation.
+
 Both model backends accept a QA JSONL path, remove reference/assistant messages
 from each record, run one example at a time, print a per-example verdict, and
 finish with an aggregate score. Scoring follows the paper: 2% relative error
