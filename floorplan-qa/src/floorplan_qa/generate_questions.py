@@ -587,8 +587,7 @@ def repositioning_task(context: LayoutContext, rng: random.Random) -> TaskResult
         instruction=(
             f"calculate how far '{label(selected)}' can move in the "
             f"'{selected_direction[0]}' direction before touching another "
-            "blocking object or the room boundary; rugs and ceiling-only "
-            "fixtures are nonblocking"
+            "blocking object or the room boundary"
         ),
         output_description="a distance in meters rounded to three decimal places",
         solver_metadata={
@@ -866,8 +865,7 @@ def max_box_task(context: LayoutContext, rng: random.Random) -> TaskResult:
         answer_text=format_number(answer),
         instruction=(
             "calculate the area of the largest rectangle that can fit at any "
-            "rotation without overlapping blocking objects or openings; rugs "
-            "and ceiling-only fixtures are nonblocking"
+            "rotation without overlapping blocking objects or openings"
         ),
         output_description="an area in square meters rounded to three decimal places",
         solver_metadata=metadata,
@@ -998,8 +996,7 @@ def placement_task(context: LayoutContext, rng: random.Random) -> TaskResult:
         instruction=(
             f"determine whether the rectangle '{object_name}' with width "
             f"{width:.3f} m and depth {depth:.3f} m can fit fully inside the "
-            "room at any rotation without overlapping blocking objects or "
-            "openings; rugs and ceiling-only fixtures are nonblocking"
+            "room at any rotation without overlapping blocking objects or openings"
         ),
         output_description="exactly True or False",
         solver_metadata={
@@ -1364,7 +1361,7 @@ def generate_record(
             "global_seed": seed,
             "solver_version": SOLVER_VERSION,
             "compatibility_mode": "paper",
-            "prompt_version": "fixed-template-v4-generic-layout-file",
+            "prompt_version": "fixed-template-v5-concise-layout-file",
             "layout_selection": "sha256-uniform-all-layouts",
             "task_selection": "all-eight-per-layout",
             "solver": result.solver_metadata,

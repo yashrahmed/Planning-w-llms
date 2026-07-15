@@ -125,6 +125,25 @@ class GeneratorTests(unittest.TestCase):
         )
         self.assertEqual(record["messages"][1]["content"], record["question"])
 
+    def test_questions_do_not_repeat_fixed_nonblocking_policy(self) -> None:
+        context = load_layout(self.layout_path)
+        for task in ("repositioning", "max_box", "placement"):
+            record = generate_record(
+                context,
+                self.layout_dir,
+                task,
+                seed=19,
+                split="train",
+            )
+            self.assertNotIn(
+                "rugs and ceiling-only fixtures are nonblocking",
+                record["question"].casefold(),
+            )
+            self.assertEqual(
+                record["provenance"]["prompt_version"],
+                "fixed-template-v5-concise-layout-file",
+            )
+
     def test_layout_files_are_written_beside_questions(self) -> None:
         context = load_layout(self.layout_path)
         output_dir = Path(self.temporary_directory.name) / "train-qa"
