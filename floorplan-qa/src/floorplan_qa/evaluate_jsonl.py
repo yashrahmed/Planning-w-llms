@@ -339,23 +339,40 @@ def answers_match(
     return normalize(actual) == normalize(expected)
 
 
+def build_ollama_payload(
+    example: Example,
+    model: str,
+    thinking: bool,
+    seed: int,
+    max_tokens: int,
+) -> dict[str, Any]:
+    """Build the V1 request with the complete raw prompt and no tools."""
+    return {
+        "model": model,
+        "messages": example.messages,
+        "stream": False,
+        "think": thinking,
+        "options": {
+            "temperature": 0,
+            "seed": seed,
+            "num_ctx": 16384,
+            "num_predict": max_tokens,
+        },
+    }
+
+
 def make_ollama_runner(args: argparse.Namespace) -> Callable[[Example], str]:
     model = args.model or DEFAULT_OLLAMA_MODEL
 
     def run(example: Example) -> str:
         payload = json.dumps(
-            {
-                "model": model,
-                "messages": example.messages,
-                "stream": False,
-                "think": args.thinking,
-                "options": {
-                    "temperature": 0,
-                    "seed": args.seed,
-                    "num_ctx": 16384,
-                    "num_predict": args.max_tokens,
-                },
-            }
+            build_ollama_payload(
+                example,
+                model=model,
+                thinking=args.thinking,
+                seed=args.seed,
+                max_tokens=args.max_tokens,
+            )
         ).encode("utf-8")
         request = urllib.request.Request(
             args.ollama_url,

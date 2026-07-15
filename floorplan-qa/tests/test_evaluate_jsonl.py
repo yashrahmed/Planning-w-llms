@@ -8,6 +8,7 @@ from pathlib import Path
 from floorplan_qa.evaluate_jsonl import (
     Example,
     answers_match,
+    build_ollama_payload,
     discrete_frechet,
     parse_sequence,
     sample_examples,
@@ -71,6 +72,37 @@ class EvaluatorTests(unittest.TestCase):
     def test_sampling_rejects_an_oversized_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "exceeds"):
             sample_examples(self.examples(2), 3, seed=0)
+
+    def test_v1_ollama_payload_keeps_raw_layout_and_has_no_tools(self) -> None:
+        example = Example(
+            line_number=1,
+            example_id="raw-context",
+            messages=[
+                {"role": "system", "content": "Solve the floorplan question."},
+                {
+                    "role": "user",
+                    "content": "Question\n\nRoom layout:\n{\"objects\":[{\"label\":\"chair\"}]}",
+                },
+            ],
+            expected="0.000",
+            task="pair_distance",
+            reference_answer=0.0,
+            source_layout="kitchen/room_0.json",
+            parameters={},
+        )
+
+        payload = build_ollama_payload(
+            example,
+            model="qwen3.5:4b",
+            thinking=False,
+            seed=0,
+            max_tokens=2500,
+        )
+
+        self.assertEqual(payload["messages"], example.messages)
+        self.assertIn("Room layout:", payload["messages"][1]["content"])
+        self.assertNotIn("tools", payload)
+        self.assertNotIn("tool_choice", payload)
 
     def test_json_report_write_is_complete_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
