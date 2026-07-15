@@ -69,10 +69,12 @@ class FloorplanToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def test_toolsets_grow_cumulatively(self) -> None:
-        counts = [len(tool_names(iteration)) for iteration in range(1, 6)]
-        self.assertEqual(counts, sorted(counts))
-        self.assertEqual(counts, [3, 5, 7, 8, 9])
+    def test_specialist_toolsets_grow_then_collapse_behind_routers(self) -> None:
+        counts = [len(tool_names(iteration)) for iteration in range(1, 7)]
+        self.assertEqual(counts, [3, 5, 7, 1, 1, 1])
+        self.assertEqual(tool_names(4), ["solve_floorplan_task"])
+        self.assertEqual(tool_names(5), ["solve_current_question"])
+        self.assertEqual(tool_names(6), ["get_final_answer"])
 
     def test_pair_tool_returns_all_simple_relationships(self) -> None:
         runtime = FloorplanToolRuntime(self.example, self.layout_dir, seed=0)
@@ -87,6 +89,7 @@ class FloorplanToolTests(unittest.TestCase):
             runtime.solve_current_question(),
             {"task": "pair_distance", "final_answer": "4.000"},
         )
+        self.assertEqual(runtime.get_final_answer(), {"final_answer": "4.000"})
 
     def test_compact_prompt_removes_raw_layout(self) -> None:
         compact = compact_question(self.example)

@@ -35,8 +35,9 @@ TOOLSET_CHANGES = {
     1: "Entity search, entity inspection, and consolidated pair measurements.",
     2: "Added exact room/free-space/largest-box measurement and axis-aligned sliding.",
     3: "Added arbitrary-rotation placement testing and clearance-aware shortest paths.",
-    4: "Added a typed task router to reduce tool-selection and argument errors.",
-    5: "Added a zero-argument current-question solver as a final reliability fallback.",
+    4: "Replaced the exposed specialist tools with one typed task router to prevent redundant calls and answer-format drift.",
+    5: "Replaced the typed router with a zero-argument current-question solver as a final reliability fallback.",
+    6: "Reduced the zero-argument solver output to only the exact final answer to prevent path-copy omissions.",
 }
 
 
@@ -175,19 +176,29 @@ CURRENT_QUESTION_TOOL = function_tool(
     {},
 )
 
+FINAL_ANSWER_TOOL = function_tool(
+    "get_final_answer",
+    "Return only the exact final answer for the current question. Call exactly once and copy final_answer verbatim.",
+    {},
+)
+
 
 def tools_for_iteration(iteration: int) -> list[dict[str, Any]]:
     if iteration not in TOOLSET_CHANGES:
-        raise ValueError("iteration must be between 1 and 5")
+        raise ValueError(
+            f"iteration must be between 1 and {max(TOOLSET_CHANGES)}"
+        )
+    if iteration == 4:
+        return [ROUTER_TOOL]
+    if iteration == 5:
+        return [CURRENT_QUESTION_TOOL]
+    if iteration == 6:
+        return [FINAL_ANSWER_TOOL]
     tools = list(BASE_TOOLS)
     if iteration >= 2:
         tools.extend(SPACE_TOOLS)
     if iteration >= 3:
         tools.extend(ADVANCED_TOOLS)
-    if iteration >= 4:
-        tools.append(ROUTER_TOOL)
-    if iteration >= 5:
-        tools.append(CURRENT_QUESTION_TOOL)
     return tools
 
 
@@ -455,6 +466,10 @@ class FloorplanToolRuntime:
     def solve_current_question(self) -> dict[str, Any]:
         return self.solve_floorplan_task(self.example.task)
 
+    def get_final_answer(self) -> dict[str, str]:
+        result = self.solve_current_question()
+        return {"final_answer": str(result["final_answer"])}
+
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         available = {
             "search_entities": self.search_entities,
@@ -466,6 +481,7 @@ class FloorplanToolRuntime:
             "find_shortest_path": self.find_shortest_path,
             "solve_floorplan_task": self.solve_floorplan_task,
             "solve_current_question": self.solve_current_question,
+            "get_final_answer": self.get_final_answer,
         }
         function = available.get(name)
         if function is None:

@@ -127,14 +127,41 @@ seed-`0` evaluation pool on every iteration, limits total generated tokens acros
 all agent turns to 2,500 per question, and stops after five iterations or as soon
 as all 25 questions pass.
 
-Each cumulative tool version is driven by feedback from the preceding result:
+Each tool version is driven by feedback from the preceding result:
 
 1. entity search, entity inspection, and pair measurements;
 2. exact free-space/largest-box measurements and object sliding;
 3. arbitrary-rotation placement testing and clearance-aware shortest paths;
-4. a typed task router, only if failures remain;
-5. a current-question geometry solver, only as a final fallback.
+4. replace the exposed specialist tools with a typed task router if redundant
+   calls or answer-format drift remain;
+5. replace the router with a zero-argument current-question geometry solver only
+   as a fallback;
+6. reduce that solver's payload to only the exact final answer if verbose path
+   output still causes copy omissions.
 
 Results, tool traces, per-iteration feedback, and the final summary are written
 to `experiments/tool-loop/`. The completed seed-`0` experiment stopped at
 iteration 3 with scores of 8/25, 18/25, and 25/25.
+
+## Continue the tool experiment on 200 questions
+
+The larger experiment starts from the previous winning v3 specialist toolset
+instead of repeating the v1 and v2 baselines:
+
+```shell
+caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh \
+  --sample-size 200 \
+  --seed 0 \
+  --max-tokens 2500 \
+  --start-iteration 3 \
+  --max-iterations 6 \
+  --output-dir experiments/tool-loop-200
+```
+
+The completed run stopped at v6 with scores of 199/200, 193/200, 199/200,
+and 200/200 for v3 through v6. V3's specialist tools had one visibility
+formatting failure. The v4 typed router fixed that case but introduced seven
+router-loop or parameter failures. V5's zero-argument solver recovered to one
+failure, caused by omitting a waypoint while copying a verbose path result. V6
+reduced the tool output to only `final_answer`, answered all 200 questions, and
+was the fastest round. Artifacts are in `experiments/tool-loop-200/`.

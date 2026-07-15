@@ -51,7 +51,7 @@ def utc_now() -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run up to five cumulative FloorplanQA tool-calling evaluations."
+        description="Run successive FloorplanQA tool-calling evaluations."
     )
     parser.add_argument("--input", type=Path, default=DEFAULT_POOL)
     parser.add_argument("--layout-dir", type=Path, default=DEFAULT_LAYOUT_DIR)
@@ -62,6 +62,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-size", type=int, default=25)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-tokens", type=int, default=2500)
+    parser.add_argument(
+        "--start-iteration",
+        type=int,
+        default=1,
+        help=(
+            "First toolset version to evaluate "
+            f"(1-{max(TOOLSET_CHANGES)})."
+        ),
+    )
     parser.add_argument("--max-iterations", type=int, default=5)
     parser.add_argument("--model", default=DEFAULT_OLLAMA_MODEL)
     parser.add_argument("--ollama-url", default="http://127.0.0.1:11434/api/chat")
@@ -216,12 +225,19 @@ def run_agent(
 ) -> dict[str, Any]:
     tools = tools_for_iteration(iteration)
     runtime = FloorplanToolRuntime(example, layout_dir, seed)
-    system_prompt = (
-        "You are a FloorplanQA tool agent. Call the single most relevant geometry tool "
-        "immediately; never do polygon arithmetic yourself. After a tool returns, copy the "
-        "appropriate exact value (prefer its final_answer field) and emit one short final line. "
-        "You may call another tool only when the first tool cannot answer the question."
-    )
+    if iteration >= 6:
+        system_prompt = (
+            "You are a FloorplanQA tool agent. Call get_final_answer exactly once. Then copy "
+            "its final_answer value byte-for-byte into one line formatted as "
+            "*Final answer*: <answer>. Never omit, shorten, round, or reformat array elements."
+        )
+    else:
+        system_prompt = (
+            "You are a FloorplanQA tool agent. Call the single most relevant geometry tool "
+            "immediately; never do polygon arithmetic yourself. After a tool returns, copy the "
+            "appropriate exact value (prefer its final_answer field) and emit one short final line. "
+            "You may call another tool only when the first tool cannot answer the question."
+        )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": compact_question(example)},
@@ -393,7 +409,9 @@ def compile_feedback(report: dict[str, Any]) -> dict[str, Any]:
         for trace in result["tool_trace"]
     )
     iteration = int(report["iteration"])
-    next_iteration = iteration + 1 if iteration < 5 else None
+    next_iteration = (
+        iteration + 1 if iteration < max(TOOLSET_CHANGES) else None
+    )
     return {
         "iteration": iteration,
         "score": report["summary"]["score"],
@@ -580,8 +598,14 @@ def main() -> None:
     args = parse_args()
     if args.training_count < 1 or args.sample_size < 1 or args.max_tokens < 1:
         raise ValueError("counts and token budget must be positive")
-    if not 1 <= args.max_iterations <= 5:
-        raise ValueError("--max-iterations must be between 1 and 5")
+    if not 1 <= args.max_iterations <= max(TOOLSET_CHANGES):
+        raise ValueError(
+            f"--max-iterations must be between 1 and {max(TOOLSET_CHANGES)}"
+        )
+    if not 1 <= args.start_iteration <= args.max_iterations:
+        raise ValueError(
+            "--start-iteration must be between 1 and --max-iterations"
+        )
 
     input_path = args.input.expanduser().resolve()
     layout_dir = args.layout_dir.expanduser().resolve()
@@ -596,8 +620,24 @@ def main() -> None:
 
     input_examples = list(iter_examples(input_path))
     examples = sample_examples(input_examples, args.sample_size, args.seed)
+    selected_ids = [example.example_id for example in examples]
     completed_reports = []
-    for iteration in range(1, args.max_iterations + 1):
+    for previous_iteration in range(1, args.start_iteration):
+        previous_path = output_dir / f"iteration-{previous_iteration}-results.json"
+        if not previous_path.is_file():
+            continue
+        previous_report = json.loads(previous_path.read_text(encoding="utf-8"))
+        if (
+            previous_report.get("status") == "complete"
+            and previous_report.get("selected_ids") == selected_ids
+        ):
+            completed_reports.append(previous_report)
+            print(
+                f"Reusing completed iteration {previous_iteration}: "
+                f"{previous_report['summary']['correct']}/{args.sample_size} correct",
+                flush=True,
+            )
+    for iteration in range(args.start_iteration, args.max_iterations + 1):
         output_path = output_dir / f"iteration-{iteration}-results.json"
         feedback_path = output_dir / f"iteration-{iteration}-feedback.json"
         report = run_iteration(
@@ -632,11 +672,14 @@ def main() -> None:
             PACKAGE_ROOT / "datasets" / "evaluations"
         ),
         "stopping_condition": (
-            "all_25_correct"
+            f"all_{args.sample_size}_correct"
             if latest["summary"]["correct"] == args.sample_size
             else "five_iterations_completed"
         ),
         "iterations_completed": len(completed_reports),
+        "starting_toolset_version": min(
+            int(report["iteration"]) for report in completed_reports
+        ),
         "scores": [
             {
                 "iteration": report["iteration"],
