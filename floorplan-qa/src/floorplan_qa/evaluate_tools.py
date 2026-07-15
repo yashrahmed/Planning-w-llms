@@ -674,7 +674,7 @@ def main() -> None:
         "stopping_condition": (
             f"all_{args.sample_size}_correct"
             if latest["summary"]["correct"] == args.sample_size
-            else "five_iterations_completed"
+            else "maximum_iterations_completed"
         ),
         "iterations_completed": len(completed_reports),
         "starting_toolset_version": min(
