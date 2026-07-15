@@ -43,6 +43,11 @@ DEFAULT_POOL = PACKAGE_ROOT / "datasets" / "ollama-eval-pools" / "seed-0" / "que
 DEFAULT_EXPERIMENT_DIR = PACKAGE_ROOT / "experiments" / "tool-loop"
 DEFAULT_TRAINING_PATH = DEFAULT_OUTPUT_DIR / "questions.jsonl"
 BASELINE_GLOB = "qwen3.5-4b-seed-0*.json"
+AGENT_DATA_BOUNDARY = {
+    "model_input": "user-authored question and answer instructions with raw layout JSON removed",
+    "tool_runtime_input": ["source_layout", "layout_dir", "seed"],
+    "scorer_only": ["task", "parameters", "expected", "reference_answer"],
+}
 
 
 def utc_now() -> str:
@@ -71,7 +76,7 @@ def parse_args() -> argparse.Namespace:
             f"(1-{max(TOOLSET_CHANGES)})."
         ),
     )
-    parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument("--model", default=DEFAULT_OLLAMA_MODEL)
     parser.add_argument("--ollama-url", default="http://127.0.0.1:11434/api/chat")
     return parser.parse_args()
@@ -140,29 +145,20 @@ def ensure_training_examples(
     return report
 
 
-def compact_question(example: Example) -> str:
-    user_content = next(
-        message["content"]
-        for message in example.messages
-        if message["role"] == "user"
-    )
-    instruction = user_content.split("\n\nRoom layout:", 1)[0]
-    formats = {
-        "pair_distance": "a decimal distance in meters rounded to three places",
-        "free_space": "a decimal area in square meters rounded to three places",
-        "view_angle": "a decimal angle in degrees rounded to three places",
-        "repositioning": "a decimal distance in meters rounded to three places",
-        "max_box": "a decimal area in square meters rounded to three places",
-        "placement": "exactly True or False",
-        "shortest_path": "a compact JSON list of [x,y] waypoints",
-        "visibility": "a compact JSON list of entity labels",
-    }
-    return (
-        f"{instruction}.\n"
-        "The layout is loaded behind the tools; do not ask for or manually reconstruct its JSON. "
-        f"The answer must be {formats.get(example.task, 'the requested value')}.\n"
-        "End with exactly: *Final answer*: <answer>"
-    )
+def compact_question(user_content: str) -> str:
+    """Remove only raw layout JSON while preserving user-authored instructions."""
+    question, marker, remainder = user_content.partition("\n\nRoom layout:")
+    if not marker:
+        return user_content
+    _, suffix_marker, suffix = remainder.lstrip("\n").partition("\n\n")
+    parts = [
+        question.strip(),
+        "The current layout is loaded behind the geometry tools; infer the task and "
+        "supply every tool argument from the question above.",
+    ]
+    if suffix_marker and suffix.strip():
+        parts.append(suffix.strip())
+    return "\n\n".join(parts)
 
 
 def parse_tool_arguments(value: Any) -> dict[str, Any]:
@@ -215,7 +211,8 @@ def call_ollama(
 
 
 def run_agent(
-    example: Example,
+    question: str,
+    source_layout: str,
     iteration: int,
     model: str,
     url: str,
@@ -224,23 +221,17 @@ def run_agent(
     layout_dir: Path,
 ) -> dict[str, Any]:
     tools = tools_for_iteration(iteration)
-    runtime = FloorplanToolRuntime(example, layout_dir, seed)
-    if iteration >= 6:
-        system_prompt = (
-            "You are a FloorplanQA tool agent. Call get_final_answer exactly once. Then copy "
-            "its final_answer value byte-for-byte into one line formatted as "
-            "*Final answer*: <answer>. Never omit, shorten, round, or reformat array elements."
-        )
-    else:
-        system_prompt = (
-            "You are a FloorplanQA tool agent. Call the single most relevant geometry tool "
-            "immediately; never do polygon arithmetic yourself. After a tool returns, copy the "
-            "appropriate exact value (prefer its final_answer field) and emit one short final line. "
-            "You may call another tool only when the first tool cannot answer the question."
-        )
+    runtime = FloorplanToolRuntime(source_layout, layout_dir, seed)
+    system_prompt = (
+        "You are a FloorplanQA tool agent. Infer the task and all arguments only from the "
+        "user's question. Call the single most relevant geometry tool immediately; never do "
+        "polygon arithmetic yourself. After a tool returns, use its computed values to answer "
+        "in the user's requested format. You may call another tool only when the first tool "
+        "cannot answer the question."
+    )
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": compact_question(example)},
+        {"role": "user", "content": question},
     ]
     remaining_tokens = max_tokens
     trace: list[dict[str, Any]] = []
@@ -353,6 +344,7 @@ def build_report(
             "thinking": False,
             "temperature": 0,
             "max_generated_tokens_per_question_across_agent_turns": max_tokens,
+            "agent_data_boundary": AGENT_DATA_BOUNDARY,
         },
         "toolset": {
             "version": iteration,
@@ -493,8 +485,16 @@ def run_iteration(
         started = time.perf_counter()
         error: str | None = None
         try:
+            if example.source_layout is None:
+                raise ValueError("example has no source_layout")
+            user_content = next(
+                message["content"]
+                for message in example.messages
+                if message["role"] == "user"
+            )
             agent = run_agent(
-                example,
+                compact_question(user_content),
+                example.source_layout,
                 iteration,
                 model,
                 url,
@@ -668,6 +668,7 @@ def main() -> None:
         "experiment": "floorplan-qa-tool-loop",
         "created_at": utc_now(),
         "training": training,
+        "agent_data_boundary": AGENT_DATA_BOUNDARY,
         "baseline_runs_from_2026_07_12": baseline_summaries(
             PACKAGE_ROOT / "datasets" / "evaluations"
         ),

@@ -1,13 +1,27 @@
 {
   "schema_version": 1,
   "experiment": "floorplan-qa-tool-loop",
-  "created_at": "2026-07-15T01:03:50.060323+00:00",
+  "created_at": "2026-07-15T02:43:26.236831+00:00",
   "training": {
     "action": "kept_existing",
     "path": "/Users/yashrahmed/Documents/personal-github-repos/Planning-w-llms/floorplan-qa/datasets/train-qa/questions.jsonl",
     "requested": 50,
     "records": 50,
     "seed": 1
+  },
+  "agent_data_boundary": {
+    "model_input": "user-authored question and answer instructions with raw layout JSON removed",
+    "tool_runtime_input": [
+      "source_layout",
+      "layout_dir",
+      "seed"
+    ],
+    "scorer_only": [
+      "task",
+      "parameters",
+      "expected",
+      "reference_answer"
+    ]
   },
   "baseline_runs_from_2026_07_12": [
     {
@@ -77,44 +91,29 @@
       }
     }
   ],
-  "stopping_condition": "all_200_correct",
-  "iterations_completed": 4,
+  "stopping_condition": "maximum_iterations_completed",
+  "iterations_completed": 1,
   "starting_toolset_version": 3,
   "scores": [
     {
       "iteration": 3,
-      "correct": 199,
+      "correct": 185,
       "total": 200,
-      "score": 0.995,
-      "runtime_seconds": 1142.428312
-    },
-    {
-      "iteration": 4,
-      "correct": 193,
-      "total": 200,
-      "score": 0.965,
-      "runtime_seconds": 835.98113
-    },
-    {
-      "iteration": 5,
-      "correct": 199,
-      "total": 200,
-      "score": 0.995,
-      "runtime_seconds": 452.165212
-    },
-    {
-      "iteration": 6,
-      "correct": 200,
-      "total": 200,
-      "score": 1.0,
-      "runtime_seconds": 431.759422
+      "score": 0.925,
+      "runtime_seconds": 2341.07418
     }
   ],
   "latest_toolset": {
-    "version": 6,
-    "change": "Reduced the zero-argument solver output to only the exact final answer to prevent path-copy omissions.",
+    "version": 3,
+    "change": "Added arbitrary-rotation placement testing and clearance-aware shortest paths.",
     "tools": [
-      "get_final_answer"
+      "search_entities",
+      "inspect_entity",
+      "measure_pair",
+      "measure_space",
+      "slide_object",
+      "test_placement",
+      "find_shortest_path"
     ]
   },
   "toolset_evolution": [
@@ -129,27 +128,6 @@
         "slide_object",
         "test_placement",
         "find_shortest_path"
-      ]
-    },
-    {
-      "iteration": 4,
-      "change": "Replaced the exposed specialist tools with one typed task router to prevent redundant calls and answer-format drift.",
-      "tools": [
-        "solve_floorplan_task"
-      ]
-    },
-    {
-      "iteration": 5,
-      "change": "Replaced the typed router with a zero-argument current-question solver as a final reliability fallback.",
-      "tools": [
-        "solve_current_question"
-      ]
-    },
-    {
-      "iteration": 6,
-      "change": "Reduced the zero-argument solver output to only the exact final answer to prevent path-copy omissions.",
-      "tools": [
-        "get_final_answer"
       ]
     }
   ],

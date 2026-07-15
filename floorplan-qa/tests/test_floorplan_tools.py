@@ -69,32 +69,41 @@ class FloorplanToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def test_specialist_toolsets_grow_then_collapse_behind_routers(self) -> None:
-        counts = [len(tool_names(iteration)) for iteration in range(1, 7)]
-        self.assertEqual(counts, [3, 5, 7, 1, 1, 1])
-        self.assertEqual(tool_names(4), ["solve_floorplan_task"])
-        self.assertEqual(tool_names(5), ["solve_current_question"])
-        self.assertEqual(tool_names(6), ["get_final_answer"])
+    def test_only_specialist_toolsets_are_available(self) -> None:
+        counts = [len(tool_names(iteration)) for iteration in range(1, 4)]
+        self.assertEqual(counts, [3, 5, 7])
+        with self.assertRaisesRegex(ValueError, "between 1 and 3"):
+            tool_names(4)
 
     def test_pair_tool_returns_all_simple_relationships(self) -> None:
-        runtime = FloorplanToolRuntime(self.example, self.layout_dir, seed=0)
+        runtime = FloorplanToolRuntime(
+            "kitchen/room_7.json", self.layout_dir, seed=0
+        )
         result = runtime.measure_pair("first", "second")
         self.assertEqual(result["distance_answer"], "4.000")
         self.assertEqual(result["angle_answer"], "90.000")
         self.assertEqual(result["intersections_in_order"], ["blocker"])
 
-    def test_current_question_solver_recomputes_answer(self) -> None:
-        runtime = FloorplanToolRuntime(self.example, self.layout_dir, seed=0)
-        self.assertEqual(
-            runtime.solve_current_question(),
-            {"task": "pair_distance", "final_answer": "4.000"},
+    def test_runtime_has_no_example_metadata(self) -> None:
+        runtime = FloorplanToolRuntime(
+            "kitchen/room_7.json", self.layout_dir, seed=0
         )
-        self.assertEqual(runtime.get_final_answer(), {"final_answer": "4.000"})
+        self.assertFalse(hasattr(runtime, "example"))
+        self.assertFalse(hasattr(runtime, "task"))
+        self.assertFalse(hasattr(runtime, "parameters"))
+        with self.assertRaisesRegex(ValueError, "unknown tool"):
+            runtime.execute("solve_current_question", {})
 
     def test_compact_prompt_removes_raw_layout(self) -> None:
-        compact = compact_question(self.example)
+        user_content = next(
+            message["content"]
+            for message in self.example.messages
+            if message["role"] == "user"
+        )
+        compact = compact_question(user_content)
         self.assertNotIn("large", compact)
-        self.assertIn("Final answer", compact)
+        self.assertIn("Briefly answer", compact)
+        self.assertIn("supply every tool argument from the question", compact)
 
 
 if __name__ == "__main__":
