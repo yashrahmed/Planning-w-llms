@@ -74,12 +74,17 @@ The hard gates are documented in
 The evaluator also reports the unforced room-source and Placement-answer
 distributions as advisory measurements.
 
-## Evaluate local Qwen 3.5 4B models
+## V1: evaluate with the full raw context
 
-Both evaluators accept a QA JSONL path, remove reference/assistant messages from
-each record, run one example at a time, print a per-example verdict, and finish
-with an aggregate score. Scoring follows the paper: 2% relative error for
-scalar tasks, 5% for free space, exact Boolean Placement, set-equality
+V1 is intentionally a single-response, tool-free baseline. Each record's
+complete system and user messages are sent directly to the model, including the
+full `Room layout:` JSON. The evaluator does not compact the prompt, preload a
+hidden layout runtime, advertise tools, accept tool calls, or run an agent loop.
+
+Both model backends accept a QA JSONL path, remove reference/assistant messages
+from each record, run one example at a time, print a per-example verdict, and
+finish with an aggregate score. Scoring follows the paper: 2% relative error
+for scalar tasks, 5% for free space, exact Boolean Placement, set-equality
 Visibility, and collision-free shortest paths within 0.6 m discrete Frechet
 distance of the reference.
 
@@ -112,132 +117,3 @@ On Apple silicon, run the Hugging Face-hosted MLX-LM 4-bit conversion with:
 
 Pass `--thinking` to either command to enable Qwen's thinking mode. Use
 `--model` or `--max-tokens` after the JSONL path to override the defaults.
-
-## Ollama tool experiment
-
-Generated checkpoints, tool traces, feedback, and summaries are written below
-`experiments/`. That directory is intentionally ignored by Git. This README is
-the canonical after-action record for committed experiment results.
-
-### Protocol and data boundary
-
-Both tool evaluations used `qwen3.5:4b` through Ollama with thinking disabled,
-temperature `0`, seed `0`, and a limit of 2,500 generated tokens per question
-across all agent turns. Questions were sampled uniformly without replacement
-from the fixed 640-question seed-`0` evaluation pool. The training generator
-retained its existing 50 examples selected with seed `1`.
-
-The leak-free evaluator enforces this boundary:
-
-| Component | Available data |
-|---|---|
-| Model | User-authored question and answer-format instructions, with raw layout JSON removed |
-| Tool runtime | Source layout path, layout directory, and evaluation seed |
-| Post-response scorer only | Task label, structured parameters, expected answer, and reference answer |
-
-Qwen must infer the requested operation and supply every tool argument from the
-visible question. The tool runtime does not hold the full evaluation example.
-
-The later v4 typed router, v5 `solve_current_question` solver, and v6
-final-answer tool were removed together with their generated results. In
-particular, v6's 200/200 result depended on hidden task and parameter metadata
-exposed through `AGENT_DATA_BOUNDARY`; it was an oracle baseline, not a valid
-agent-tool evaluation. The leak-free v3 rerun below is the retained result.
-
-### Retained v3 tools
-
-| Tool | Description |
-|---|---|
-| `search_entities` | Search object, door, and window labels in the current floorplan. |
-| `inspect_entity` | Get exact centroid, bounds, polygon area, and kind for one floorplan entity. |
-| `measure_pair` | Measure two entity centroids and their relationships: distance, angle from north, and line intersections. |
-| `measure_space` | Measure room area, non-occupied floor area, or the largest obstacle-free rectangle. |
-| `slide_object` | Measure how far an object can translate before first contact with a blocker or room boundary. |
-| `test_placement` | Test whether a rectangle can fit at any rotation in free floor space. |
-| `find_shortest_path` | Find a valid shortest waypoint path between entity centroids with obstacle clearance. |
-
-The system prompt is:
-
-> You are a FloorplanQA tool agent. Infer the task and all arguments only from
-> the user's question. Call the single most relevant geometry tool immediately;
-> never do polygon arithmetic yourself. After a tool returns, use its computed
-> values to answer in the user's requested format. You may call another tool
-> only when the first tool cannot answer the question.
-
-### Historical 25-question tool evolution
-
-This prototype loop predates the stricter structural data boundary above. It is
-retained here to document how the specialist toolset evolved, not as the final
-accuracy measurement.
-
-| Version | Change | Correct | Formatting failures | Runtime | Generated tokens |
-|---|---|---:|---:|---:|---:|
-| v1 | Entity search, inspection, and pair measurements | 8/25 | 15 | 913.6 s | 15,239 |
-| v2 | Added space measurement and object sliding | 18/25 | 7 | 405.5 s | 6,036 |
-| v3 | Added rotated placement and clearance-aware paths | 25/25 | 0 | 173.5 s | 1,990 |
-
-V1 was perfect on pair-distance, view-angle, and visibility questions but lacked
-dedicated tools for most other tasks. V2 fixed free-space, largest-box, and
-repositioning questions; its seven remaining failures were placement and
-shortest-path questions. V3 added those two missing capabilities and answered
-the 25-question prototype sample completely.
-
-### Leak-free 200-question v3 evaluation
-
-The final retained evaluation reran only v3 on 200 fixed-seed questions after
-removing task-derived prompt hints and severing the runtime's access to task,
-parameter, expected-answer, and reference-answer metadata.
-
-| Task | Correct |
-|---|---:|
-| Free space | 28/28 |
-| Largest box | 26/26 |
-| Pair distance | 26/26 |
-| Placement | 23/23 |
-| Repositioning | 22/22 |
-| Shortest path | 25/25 |
-| View angle | 21/21 |
-| Visibility | 14/29 |
-| **Overall** | **185/200 (92.5%)** |
-
-The run generated 46,461 tokens and took 2,341.1 seconds, averaging 11.71
-seconds per question. There were no runtime errors or geometry-tool exceptions.
-
-All 15 failures were visibility questions that exhausted the eight-tool-call
-loop without emitting a parsable final answer:
-
-| Failure mode | Count | What happened |
-|---|---:|---|
-| Never called `measure_pair` | 9 | Qwen spent every call on entity search and inspection. |
-| Chose the wrong solver | 1 | Qwen called `find_shortest_path` for a line-intersection question. |
-| Called `measure_pair` with the wrong entity arguments | 2 | The tool ran correctly for a pair that did not match the requested endpoints. |
-| Received the exact correct `measure_pair` result but continued | 3 | Qwen kept searching or inspecting and never formatted the returned visibility answer. |
-
-Across failed questions, Qwen made 120 tool calls: 93 entity inspections, 21
-entity searches, five pair measurements, and one shortest-path call. Failures
-averaged 936.9 generated tokens and reached a maximum of 1,864. The failure
-cluster therefore points to tool discoverability, argument selection, and
-stopping behavior rather than the deterministic geometry implementation.
-
-### Reproduce the retained evaluation
-
-Run the 200-question v3 evaluation while preventing macOS sleep:
-
-```shell
-caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh \
-  --sample-size 200 \
-  --seed 0 \
-  --max-tokens 2500 \
-  --start-iteration 3 \
-  --max-iterations 3 \
-  --output-dir experiments/tool-loop-200
-```
-
-The generated reports remain available locally for inspection but are excluded
-from commits by `floorplan-qa/experiments/` in the repository `.gitignore`.
-
-### Validation
-
-- `uv run python -m unittest discover -s tests -v`: 15 tests passed.
-- `bash -n scripts/evaluate_ollama_tools.sh`: evaluator launcher syntax passed.
-- `git diff --check`: no whitespace errors.
