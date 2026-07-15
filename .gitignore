@@ -225,6 +225,9 @@ floorplan-qa/datasets/
 # Keep local evaluator result reports out of pull requests.
 floorplan-qa/datasets/evaluations/*.json
 
+# Generated FloorplanQA tool-loop checkpoints, traces, feedback, and summaries
+floorplan-qa/experiments/
+
 # Materialized upstream FloorplanQA tooling (not a nested Git repository)
 floorplan-qa/fpqa-tooling/
 

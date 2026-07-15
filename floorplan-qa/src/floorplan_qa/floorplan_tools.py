@@ -10,7 +10,6 @@ from typing import Any
 
 from shapely.validation import make_valid
 
-from .evaluate_jsonl import Example
 from .generate_questions import (
     DEFAULT_GRID_RESOLUTION,
     LayoutContext,
@@ -35,8 +34,6 @@ TOOLSET_CHANGES = {
     1: "Entity search, entity inspection, and consolidated pair measurements.",
     2: "Added exact room/free-space/largest-box measurement and axis-aligned sliding.",
     3: "Added arbitrary-rotation placement testing and clearance-aware shortest paths.",
-    4: "Added a typed task router to reduce tool-selection and argument errors.",
-    5: "Added a zero-argument current-question solver as a final reliability fallback.",
 }
 
 
@@ -141,53 +138,16 @@ ADVANCED_TOOLS = [
     ),
 ]
 
-ROUTER_TOOL = function_tool(
-    "solve_floorplan_task",
-    "Solve one typed FloorplanQA geometry task using exact deterministic geometry.",
-    {
-        "task": {
-            "type": "string",
-            "enum": [
-                "pair_distance",
-                "free_space",
-                "view_angle",
-                "repositioning",
-                "max_box",
-                "placement",
-                "shortest_path",
-                "visibility",
-            ],
-        },
-        "first": {"type": "string"},
-        "second": {"type": "string"},
-        "object_name": {"type": "string"},
-        "direction": {"type": "string"},
-        "width": {"type": "number"},
-        "depth": {"type": "number"},
-        "clearance": {"type": "number"},
-    },
-    ["task"],
-)
-
-CURRENT_QUESTION_TOOL = function_tool(
-    "solve_current_question",
-    "Solve the current FloorplanQA question directly from its stated parameters and source layout.",
-    {},
-)
-
-
 def tools_for_iteration(iteration: int) -> list[dict[str, Any]]:
     if iteration not in TOOLSET_CHANGES:
-        raise ValueError("iteration must be between 1 and 5")
+        raise ValueError(
+            f"iteration must be between 1 and {max(TOOLSET_CHANGES)}"
+        )
     tools = list(BASE_TOOLS)
     if iteration >= 2:
         tools.extend(SPACE_TOOLS)
     if iteration >= 3:
         tools.extend(ADVANCED_TOOLS)
-    if iteration >= 4:
-        tools.append(ROUTER_TOOL)
-    if iteration >= 5:
-        tools.append(CURRENT_QUESTION_TOOL)
     return tools
 
 
@@ -197,18 +157,20 @@ def tool_names(iteration: int) -> list[str]:
 
 @dataclass
 class FloorplanToolRuntime:
-    """Execute tools against one example without exposing its reference answer."""
+    """Execute specialist geometry tools against one source floorplan."""
 
-    example: Example
+    source_layout: str
     layout_dir: Path
     seed: int
 
     def __post_init__(self) -> None:
-        if self.example.source_layout is None:
-            raise ValueError("example has no source_layout")
-        self.context: LayoutContext = load_layout(
-            self.layout_dir / self.example.source_layout
-        )
+        layout_root = self.layout_dir.resolve()
+        layout_path = (layout_root / self.source_layout).resolve()
+        try:
+            layout_path.relative_to(layout_root)
+        except ValueError as error:
+            raise ValueError("source layout must be inside layout_dir") from error
+        self.context: LayoutContext = load_layout(layout_path)
         self.entities = {label(entity).casefold(): entity for entity in self.context.entities}
 
     def resolve_entity(self, name: str) -> dict[str, Any]:
@@ -416,45 +378,6 @@ class FloorplanToolRuntime:
             "final_answer": answer,
         }
 
-    def solve_floorplan_task(self, task: str, **arguments: Any) -> dict[str, Any]:
-        parameters = self.example.parameters
-        first = str(arguments.get("first") or parameters.get("object_1") or "")
-        second = str(arguments.get("second") or parameters.get("object_2") or "")
-        if task == "pair_distance":
-            result = self.measure_pair(first, second)
-            return {"task": task, "final_answer": result["distance_answer"]}
-        if task == "view_angle":
-            result = self.measure_pair(first, second)
-            return {"task": task, "final_answer": result["angle_answer"]}
-        if task == "visibility":
-            result = self.measure_pair(first, second)
-            return {"task": task, "final_answer": result["visibility_answer"]}
-        if task == "free_space":
-            return self.measure_space("free_area")
-        if task == "max_box":
-            return self.measure_space("largest_free_rectangle")
-        if task == "repositioning":
-            return self.slide_object(
-                str(arguments.get("object_name") or parameters.get("object_to_move") or ""),
-                str(arguments.get("direction") or parameters.get("direction") or ""),
-            )
-        if task == "placement":
-            return self.test_placement(
-                str(arguments.get("object_name") or parameters.get("object_name") or "object"),
-                float(arguments.get("width") or parameters.get("object_width") or 0),
-                float(arguments.get("depth") or parameters.get("object_depth") or 0),
-            )
-        if task == "shortest_path":
-            return self.find_shortest_path(
-                first,
-                second,
-                float(arguments.get("clearance") or parameters.get("clearance") or 0.15),
-            )
-        raise ValueError(f"unknown FloorplanQA task: {task}")
-
-    def solve_current_question(self) -> dict[str, Any]:
-        return self.solve_floorplan_task(self.example.task)
-
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         available = {
             "search_entities": self.search_entities,
@@ -464,8 +387,6 @@ class FloorplanToolRuntime:
             "slide_object": self.slide_object,
             "test_placement": self.test_placement,
             "find_shortest_path": self.find_shortest_path,
-            "solve_floorplan_task": self.solve_floorplan_task,
-            "solve_current_question": self.solve_current_question,
         }
         function = available.get(name)
         if function is None:
