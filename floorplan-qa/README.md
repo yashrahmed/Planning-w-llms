@@ -138,6 +138,12 @@ The leak-free evaluator enforces this boundary:
 Qwen must infer the requested operation and supply every tool argument from the
 visible question. The tool runtime does not hold the full evaluation example.
 
+The later v4 typed router, v5 `solve_current_question` solver, and v6
+final-answer tool were removed together with their generated results. In
+particular, v6's 200/200 result depended on hidden task and parameter metadata
+exposed through `AGENT_DATA_BOUNDARY`; it was an oracle baseline, not a valid
+agent-tool evaluation. The leak-free v3 rerun below is the retained result.
+
 ### Retained v3 tools
 
 | Tool | Description |
@@ -229,3 +235,9 @@ caffeinate -dimsu ./scripts/evaluate_ollama_tools.sh \
 
 The generated reports remain available locally for inspection but are excluded
 from commits by `floorplan-qa/experiments/` in the repository `.gitignore`.
+
+### Validation
+
+- `uv run python -m unittest discover -s tests -v`: 15 tests passed.
+- `bash -n scripts/evaluate_ollama_tools.sh`: evaluator launcher syntax passed.
+- `git diff --check`: no whitespace errors.
