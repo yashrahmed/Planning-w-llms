@@ -160,7 +160,10 @@ allowed layout directory, and the runtime rejects absolute paths, directory
 components, non-JSON filenames, and files outside that directory. The V1
 evaluator remains the tool-free baseline described above; the separate tool
 evaluator exposes the tools in this table while preserving the same explicit
-file boundary.
+file boundary. Layout parsing and geometry solvers live in the shared
+`floorplan_qa.geometry` module, which is used by the generator, quality checks,
+scorer, and tool runtime; the tool runtime does not import the question
+generator.
 
 ### Eight-question tool evaluation (2026-07-15)
 

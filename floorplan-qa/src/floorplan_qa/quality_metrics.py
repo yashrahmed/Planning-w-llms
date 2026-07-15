@@ -15,16 +15,18 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 
 from .generate_questions import (
-    DEFAULT_GRID_RESOLUTION,
     DEFAULT_LAYOUT_DIR,
-    GEOMETRY_TOLERANCE,
-    MAX_BOX_RELATIVE_TOLERANCE,
     GENERATION_REPORT_FILENAME,
     TASKS,
+    generate_record,
+)
+from .geometry import (
+    DEFAULT_GRID_RESOLUTION,
+    GEOMETRY_TOLERANCE,
+    MAX_BOX_RELATIVE_TOLERANCE,
     centered_rectangle,
     entity_centroid,
     entity_polygon,
-    generate_record,
     geometry_polygons,
     is_ceiling_fixture,
     is_soft_covering,

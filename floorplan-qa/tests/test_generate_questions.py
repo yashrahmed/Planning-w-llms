@@ -10,14 +10,16 @@ from shapely.geometry import Polygon
 
 from floorplan_qa.generate_questions import (
     TASKS,
-    entity_centroid,
     generate_record,
-    label,
     layout_filename,
     layout_paths,
+    write_layout_files,
+)
+from floorplan_qa.geometry import (
+    entity_centroid,
+    label,
     load_layout,
     maximum_slide_distance,
-    write_layout_files,
 )
 from floorplan_qa.quality_metrics import RATE_THRESHOLDS, assess
 

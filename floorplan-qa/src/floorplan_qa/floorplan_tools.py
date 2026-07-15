@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from .generate_questions import (
+from .geometry import (
     build_room_polygon,
     entity_centroid,
     entity_polygon,

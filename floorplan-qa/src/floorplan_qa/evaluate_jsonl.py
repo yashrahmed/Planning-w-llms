@@ -23,8 +23,8 @@ from typing import Any
 from shapely.geometry import LineString
 from shapely.validation import make_valid
 
-from .generate_questions import (
-    DEFAULT_LAYOUT_DIR,
+from .generate_questions import DEFAULT_LAYOUT_DIR
+from .geometry import (
     entity_centroid,
     label,
     load_layout,
