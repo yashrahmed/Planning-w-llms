@@ -14,6 +14,10 @@ from floorplan_qa.evaluate_jsonl import (
     sample_examples,
     write_evaluation_report,
 )
+from floorplan_qa.evaluate_tools import (
+    agent_messages,
+    build_ollama_payload as build_tool_ollama_payload,
+)
 
 
 class EvaluatorTests(unittest.TestCase):
@@ -111,6 +115,44 @@ class EvaluatorTests(unittest.TestCase):
             write_evaluation_report(output_path, report)
             self.assertEqual(json.loads(output_path.read_text()), report)
             self.assertFalse((output_path.parent / ".result.json.tmp").exists())
+
+    def test_tool_payload_has_tools_without_scorer_metadata(self) -> None:
+        example = Example(
+            line_number=1,
+            example_id="explicit-file",
+            messages=[
+                {"role": "system", "content": "Use exact geometry."},
+                {
+                    "role": "user",
+                    "content": (
+                        "Calculate the distance.\n\nRoom layout can be found in "
+                        "file : kitchen-7-train.json"
+                    ),
+                },
+            ],
+            expected="4.000",
+            task="pair_distance",
+            reference_answer=4.0,
+            source_layout="kitchen/room_7.json",
+            parameters={"object_1": "first", "object_2": "second"},
+            layout_file="kitchen-7-train.json",
+        )
+
+        messages = agent_messages(example)
+        payload = build_tool_ollama_payload(
+            messages,
+            model="qwen3.5:4b",
+            seed=0,
+            max_tokens=2500,
+        )
+        serialized_messages = json.dumps(payload["messages"])
+        self.assertIn("kitchen-7-train.json", serialized_messages)
+        self.assertNotIn("kitchen/room_7.json", serialized_messages)
+        self.assertNotIn("pair_distance", serialized_messages)
+        self.assertNotIn("4.000", serialized_messages)
+        self.assertNotIn("object_1", serialized_messages)
+        self.assertEqual(len(payload["tools"]), 10)
+        self.assertNotIn("tool_choice", payload)
 
 
 if __name__ == "__main__":

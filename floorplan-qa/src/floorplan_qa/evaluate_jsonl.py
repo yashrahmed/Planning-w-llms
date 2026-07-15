@@ -23,8 +23,8 @@ from typing import Any
 from shapely.geometry import LineString
 from shapely.validation import make_valid
 
-from .generate_questions import (
-    DEFAULT_LAYOUT_DIR,
+from .generate_questions import DEFAULT_LAYOUT_DIR
+from .geometry import (
     entity_centroid,
     label,
     load_layout,
@@ -49,6 +49,7 @@ class Example:
     reference_answer: Any
     source_layout: str | None
     parameters: dict[str, Any]
+    layout_file: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -140,6 +141,11 @@ def iter_examples(path: Path) -> Iterator[Example]:
                     record["parameters"]
                     if isinstance(record.get("parameters"), dict)
                     else {}
+                ),
+                layout_file=(
+                    str(record["layout_file"])
+                    if record.get("layout_file") is not None
+                    else None
                 ),
             )
 
@@ -244,9 +250,10 @@ def parse_path(value: str | Any) -> list[tuple[float, float]] | None:
 def candidate_path_is_valid(
     example: Example, path: list[tuple[float, float]], layout_dir: Path
 ) -> bool:
-    if example.source_layout is None or len(path) < 2:
+    layout_reference = example.layout_file or example.source_layout
+    if layout_reference is None or len(path) < 2:
         return False
-    context = load_layout(layout_dir / example.source_layout)
+    context = load_layout(layout_dir / layout_reference)
     entities = {label(entity): entity for entity in context.entities}
     try:
         first = entities[example.parameters["object_1"]]
