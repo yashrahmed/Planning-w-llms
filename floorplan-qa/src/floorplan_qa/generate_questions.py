@@ -1316,11 +1316,9 @@ def layout_filename(context: LayoutContext, split: str) -> str:
     return f"{context.source_group}-{context.layout_id}-{split}.json"
 
 
-def build_question(
-    context: LayoutContext, result: TaskResult, room_layout_file: str
-) -> str:
+def build_question(result: TaskResult, room_layout_file: str) -> str:
     return (
-        f"Given the {context.room_type} layout, {result.instruction}.\n\n"
+        f"Given the layout of the room, {result.instruction}.\n\n"
         f"Room layout can be found in file : {room_layout_file}\n\n"
         "Briefly show the geometric steps used. If required data is invalid or "
         "missing, return '*Final answer*: ERROR'. Otherwise put the answer on "
@@ -1345,7 +1343,7 @@ def generate_record(
         else TASK_GENERATORS[task](context, rng)
     )
     room_layout_file = layout_filename(context, split)
-    question = build_question(context, result, room_layout_file)
+    question = build_question(result, room_layout_file)
     system_prompt = (
         "Use exact polygon geometry where possible. Always provide a final answer "
         "and do not return ERROR merely because the computation is difficult."
@@ -1366,7 +1364,7 @@ def generate_record(
             "global_seed": seed,
             "solver_version": SOLVER_VERSION,
             "compatibility_mode": "paper",
-            "prompt_version": "fixed-template-v3-layout-file",
+            "prompt_version": "fixed-template-v4-generic-layout-file",
             "layout_selection": "sha256-uniform-all-layouts",
             "task_selection": "all-eight-per-layout",
             "solver": result.solver_metadata,

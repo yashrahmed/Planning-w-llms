@@ -113,6 +113,8 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertEqual(record["layout_file"], "kitchen-0-train.json")
         self.assertEqual(record["split"], "train")
+        self.assertTrue(record["question"].startswith("Given the layout of the room, "))
+        self.assertNotIn("Given the kitchen layout", record["question"])
         self.assertIn(
             "Room layout can be found in file : kitchen-0-train.json",
             record["question"],
