@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import tempfile
@@ -9,12 +10,16 @@ from pathlib import Path
 from shapely.geometry import Polygon
 
 from floorplan_qa.generate_questions import (
+    BOOLEAN_TASKS,
     TASKS,
+    balanced_layout_count,
+    boolean_answer_targets,
     generate_record,
     layout_filename,
     layout_paths,
     write_layout_files,
 )
+from floorplan_qa.floorplan_tools import FloorplanToolRuntime
 from floorplan_qa.geometry import (
     entity_centroid,
     label,
@@ -83,6 +88,82 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 4)
         self.assertEqual(set(first), set(self.layout_dir.glob("*/*.json")))
+
+    def test_boolean_answer_schedule_is_deterministic_and_exactly_balanced(self) -> None:
+        self.assertEqual(BOOLEAN_TASKS, ("placement",))
+        first = boolean_answer_targets("placement", count=10, seed=12)
+        second = boolean_answer_targets("placement", count=10, seed=12)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.count(True), 5)
+        self.assertEqual(first.count(False), 5)
+
+    def test_layout_count_must_allow_exact_boolean_balance(self) -> None:
+        self.assertEqual(balanced_layout_count("10"), 10)
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, "must be even"):
+            balanced_layout_count("5")
+
+    def test_placement_can_target_both_boolean_answers(self) -> None:
+        balanced_layout = sample_layout()
+        balanced_layout["room_boundary"] = [
+            {"x": 0.0, "y": 0.0},
+            {"x": 2.0, "y": 0.0},
+            {"x": 2.0, "y": 2.0},
+            {"x": 0.0, "y": 2.0},
+            {"x": 0.0, "y": 0.0},
+        ]
+        balanced_layout["openings"] = {"windows": [], "doors": []}
+        balanced_layout["objects"] = [
+            rectangle("divider", 0.9, 0.0, 1.1, 2.0),
+            rectangle("ceiling light", 0.1, 0.1, 0.2, 0.2),
+        ]
+        self.layout_path.write_text(json.dumps(balanced_layout), encoding="utf-8")
+        context = load_layout(self.layout_path)
+
+        positive = generate_record(
+            context,
+            self.layout_dir,
+            "placement",
+            seed=19,
+            expected_boolean_answer=True,
+        )
+        negative = generate_record(
+            context,
+            self.layout_dir,
+            "placement",
+            seed=19,
+            expected_boolean_answer=False,
+        )
+
+        self.assertIs(positive["reference_answer"], True)
+        self.assertIsNotNone(positive["parameters"]["witness"])
+        self.assertIs(negative["reference_answer"], False)
+        self.assertIsNotNone(negative["parameters"]["false_certificate"])
+        self.assertIs(positive["provenance"]["boolean_answer_target"], True)
+        self.assertIs(negative["provenance"]["boolean_answer_target"], False)
+
+    def test_negative_placement_scales_catalog_dimensions_when_needed(self) -> None:
+        context = load_layout(self.layout_path)
+
+        negative = generate_record(
+            context,
+            self.layout_dir,
+            "placement",
+            seed=19,
+            expected_boolean_answer=False,
+        )
+
+        self.assertIs(negative["reference_answer"], False)
+        self.assertIs(negative["parameters"]["catalog_dimensions_scaled"], True)
+        self.assertIsNotNone(negative["parameters"]["false_certificate"])
+        self.assertIn(
+            f"width {negative['parameters']['object_width']:.3f} m",
+            negative["question"],
+        )
+        self.assertIn(
+            f"depth {negative['parameters']['object_depth']:.3f} m",
+            negative["question"],
+        )
 
     def test_continuous_repositioning_finds_first_contact(self) -> None:
         moving = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
@@ -184,6 +265,49 @@ class GeneratorTests(unittest.TestCase):
         dx, dy = end[0] - start[0], end[1] - start[1]
         angle = math.degrees(math.acos(dy / math.hypot(dx, dy)))
         self.assertAlmostEqual(angle, 100.081, places=3)
+
+    def test_released_positive_placement_matches_agent_tool_when_available(self) -> None:
+        released_root = (
+            Path(__file__).resolve().parents[1]
+            / "datasets"
+            / "FloorplanQA-Layouts"
+            / "layouts"
+        )
+        kitchen_path = released_root / "kitchen" / "room_253.json"
+        if not kitchen_path.is_file():
+            self.skipTest("released layouts have not been downloaded")
+
+        context = load_layout(kitchen_path)
+        record = generate_record(
+            context,
+            released_root,
+            "placement",
+            seed=7,
+            split="test",
+            expected_boolean_answer=True,
+        )
+        output_dir = Path(self.temporary_directory.name) / "agent-layouts"
+        write_layout_files([context], output_dir, "test")
+        tool_result = FloorplanToolRuntime(output_dir).find_space_with_size(
+            record["parameters"]["object_width"],
+            record["parameters"]["object_depth"],
+            record["layout_file"],
+        )
+
+        self.assertIs(record["reference_answer"], True)
+        self.assertIn("The answer is True.", tool_result)
+
+    def test_max_box_answer_does_not_depend_on_generation_seed(self) -> None:
+        context = load_layout(self.layout_path)
+
+        first = generate_record(context, self.layout_dir, "max_box", seed=7)
+        second = generate_record(context, self.layout_dir, "max_box", seed=99)
+
+        self.assertEqual(first["reference_answer"], second["reference_answer"])
+        self.assertEqual(first["parameters"], second["parameters"])
+        self.assertEqual(
+            first["provenance"]["solver"], second["provenance"]["solver"]
+        )
 
 
 if __name__ == "__main__":

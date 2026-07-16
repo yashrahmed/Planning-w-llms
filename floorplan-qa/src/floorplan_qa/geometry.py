@@ -15,8 +15,10 @@ from typing import Any
 
 from shapely.affinity import translate
 from shapely.geometry import LineString, Point, Polygon
-from shapely.ops import linemerge, polygonize, unary_union
+from shapely.ops import linemerge, polygonize, triangulate, unary_union
 from shapely.validation import make_valid
+
+from .cgal_geometry import erode_geometry
 
 GEOMETRY_TOLERANCE = 1e-7
 
@@ -238,55 +240,74 @@ def maximum_slide_distance(
     direction: tuple[float, float],
     tolerance: float = REPOSITION_TOLERANCE,
 ) -> float:
-    """Continuously bracket the first collision using a monotone swept volume."""
+    """Return first contact along a CGAL configuration-space ray."""
     obstacle_union = union_polygons(obstacles)
     if not room.covers(moving):
         return 0.0
     if obstacle_union is not None and moving.intersection(obstacle_union).area > 1e-8:
         return 0.0
 
-    def swept_volume(distance: float) -> Any:
-        moved = translate(
-            moving,
-            xoff=direction[0] * distance,
-            yoff=direction[1] * distance,
-        )
-        pieces: list[Any] = [moving, moved]
-        for first, second in pairwise(list(moving.exterior.coords)):
-            shifted_first = (
-                first[0] + direction[0] * distance,
-                first[1] + direction[1] * distance,
-            )
-            shifted_second = (
-                second[0] + direction[0] * distance,
-                second[1] + direction[1] * distance,
-            )
-            pieces.append(Polygon([first, second, shifted_second, shifted_first]))
-        return unary_union(pieces)
-
-    def collision_by(distance: float) -> bool:
-        swept = swept_volume(distance)
-        if swept.difference(room).area > GEOMETRY_TOLERANCE:
-            return True
-        return bool(
-            obstacle_union is not None
-            and swept.intersection(obstacle_union).area > GEOMETRY_TOLERANCE
-        )
+    free_space = (
+        room
+        if obstacle_union is None
+        else make_valid(room.difference(obstacle_union))
+    )
+    reference = (float(moving.centroid.x), float(moving.centroid.y))
+    local_shape = translate(moving, xoff=-reference[0], yoff=-reference[1])
+    inset_shape = local_shape.buffer(-GEOMETRY_TOLERANCE, join_style=2)
+    if isinstance(inset_shape, Polygon) and not inset_shape.is_empty:
+        local_shape = inset_shape
+    feasible = erode_geometry(free_space, local_shape)
+    if feasible.is_empty:
+        return 0.0
 
     min_x, min_y, max_x, max_y = room.bounds
-    low = 0.0
-    high = math.hypot(max_x - min_x, max_y - min_y) + max(
-        max_x - min_x, max_y - min_y
+    ray_length = 2.0 * math.hypot(max_x - min_x, max_y - min_y) + max(
+        moving.bounds[2] - moving.bounds[0], moving.bounds[3] - moving.bounds[1]
     )
-    if not collision_by(high):
-        raise ValueError("could not bracket repositioning collision")
-    while high - low > tolerance:
-        middle = (low + high) / 2.0
-        if collision_by(middle):
-            high = middle
-        else:
-            low = middle
-    return low
+    ray = LineString(
+        [
+            reference,
+            (
+                reference[0] + direction[0] * ray_length,
+                reference[1] + direction[1] * ray_length,
+            ),
+        ]
+    )
+    allowed = ray.intersection(feasible)
+    intervals: list[tuple[float, float]] = []
+
+    def collect_intervals(geometry: Any) -> None:
+        if geometry is None or geometry.is_empty:
+            return
+        if isinstance(geometry, LineString):
+            projections = [
+                (x - reference[0]) * direction[0]
+                + (y - reference[1]) * direction[1]
+                for x, y, *_ in geometry.coords
+            ]
+            intervals.append((min(projections), max(projections)))
+            return
+        for part in getattr(geometry, "geoms", []):
+            collect_intervals(part)
+
+    collect_intervals(allowed)
+    intervals.sort()
+    reachable_end = 0.0
+    found_start = False
+    for start, end in intervals:
+        if end < -tolerance:
+            continue
+        if not found_start:
+            if start > tolerance:
+                break
+            found_start = True
+            reachable_end = max(0.0, end)
+            continue
+        if start > reachable_end + tolerance:
+            break
+        reachable_end = max(reachable_end, end)
+    return max(0.0, reachable_end - tolerance)
 
 def rectangle_from_extents(
     center: tuple[float, float],
@@ -305,19 +326,62 @@ def rectangle_from_extents(
     ]
     return Polygon(points)
 
-def sample_points_in_geometry(
-    geometry: Any, rng: random.Random, count: int
+def halton_value(index: int, base: int) -> float:
+    """Return one deterministic low-discrepancy coordinate in [0, 1)."""
+    result = 0.0
+    fraction = 1.0
+    while index:
+        fraction /= base
+        index, remainder = divmod(index, base)
+        result += remainder * fraction
+    return result
+
+
+def deterministic_points_in_geometry(
+    geometry: Any, count: int
 ) -> list[tuple[float, float]]:
-    points = [
-        (float(polygon.representative_point().x), float(polygon.representative_point().y))
-        for polygon in geometry_polygons(geometry)
-    ]
+    """Return stable interior candidates without an RNG or layout identity.
+
+    Representative points cover every connected polygon component first.
+    Triangulation representatives add deterministic coverage of non-convex
+    regions, and a Halton sequence fills any remaining budget.
+    """
+    if geometry is None or geometry.is_empty or count <= 0:
+        return []
+
+    points: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+
+    def add(point: Point) -> None:
+        coordinate = (float(point.x), float(point.y))
+        key = (round(coordinate[0], 12), round(coordinate[1], 12))
+        if key not in seen and geometry.covers(point):
+            seen.add(key)
+            points.append(coordinate)
+
+    polygons = sorted(geometry_polygons(geometry), key=lambda part: part.bounds)
+    for polygon in polygons:
+        add(polygon.representative_point())
+        add(polygon.centroid)
+    for polygon in polygons:
+        for triangle in triangulate(polygon):
+            clipped = triangle.intersection(polygon)
+            for part in geometry_polygons(clipped):
+                if part.area > GEOMETRY_TOLERANCE:
+                    add(part.representative_point())
+                    if len(points) >= count:
+                        return points[:count]
+
     min_x, min_y, max_x, max_y = geometry.bounds
+    index = 1
     attempts = 0
     while len(points) < count and attempts < count * 100:
-        point = (rng.uniform(min_x, max_x), rng.uniform(min_y, max_y))
-        if geometry.covers(Point(point)):
-            points.append(point)
+        candidate = Point(
+            min_x + halton_value(index, 2) * (max_x - min_x),
+            min_y + halton_value(index, 3) * (max_y - min_y),
+        )
+        add(candidate)
+        index += 1
         attempts += 1
     return points
 
@@ -382,14 +446,14 @@ def rectangle_from_parameters(parameters: list[float]) -> Polygon:
     x, y, width, depth, angle = parameters
     return centered_rectangle((x, y), width, depth, angle)
 
-def optimize_maximum_rectangle(
-    free_space: Any, room: Polygon, rng: random.Random
+def optimize_maximum_rectangle_candidates(
+    free_space: Any, room: Polygon
 ) -> tuple[list[float], dict[str, Any]]:
-    """Deterministic global search with exact feasibility and local refinement."""
+    """Run a seed-independent numerical search with exact witness validation."""
     min_x, min_y, max_x, max_y = room.bounds
     cap = math.hypot(max_x - min_x, max_y - min_y)
     angles = edge_angles(free_space)
-    centers = sample_points_in_geometry(free_space, rng, 10)
+    centers = deterministic_points_in_geometry(free_space, 12)
     seeds: list[tuple[float, list[float]]] = []
     for center in centers:
         for angle in angles[:20]:
@@ -400,8 +464,9 @@ def optimize_maximum_rectangle(
                 )
     if not seeds:
         return [0.0, 0.0, 0.0, 0.0, 0.0], {
-            "algorithm": "deterministic_differential_evolution",
+            "algorithm": "deterministic_candidate_refinement",
             "converged": True,
+            "global_optimum_certified": False,
             "iterations": 0,
             "relative_improvement_window": 0.0,
         }
@@ -436,9 +501,8 @@ def optimize_maximum_rectangle(
     population = [parameters for _, parameters in seeds[:population_size]]
     while len(population) < population_size:
         center = centers[len(population) % len(centers)]
-        population.append(
-            [center[0], center[1], 0.02, 0.02, rng.uniform(0.0, math.pi)]
-        )
+        angle = angles[len(population) % len(angles)]
+        population.append([center[0], center[1], 0.02, 0.02, angle])
     scores = [fitness(candidate) for candidate in population]
     history = [max(scores)]
     converged = False
@@ -447,7 +511,9 @@ def optimize_maximum_rectangle(
     for generation in range(1, 61):
         for index, target in enumerate(population):
             choices = [item for item in range(population_size) if item != index]
-            first, second, third = rng.sample(choices, 3)
+            offset = (generation * 7 + index * 11) % len(choices)
+            ordered = choices[offset:] + choices[:offset]
+            first, second, third = ordered[:3]
             mutant = [
                 population[first][dimension]
                 + 0.72
@@ -458,11 +524,11 @@ def optimize_maximum_rectangle(
                 for dimension in range(5)
             ]
             mutant = normalize(mutant)
-            forced = rng.randrange(5)
+            retained_dimension = (index + generation) % 5
             trial = [
-                mutant[dimension]
-                if dimension == forced or rng.random() < 0.82
-                else target[dimension]
+                target[dimension]
+                if dimension == retained_dimension
+                else mutant[dimension]
                 for dimension in range(5)
             ]
             trial_score = fitness(trial)
@@ -498,10 +564,11 @@ def optimize_maximum_rectangle(
                         improved = True
 
     metadata = {
-        "algorithm": "deterministic_differential_evolution",
+        "algorithm": "deterministic_candidate_refinement",
         "population": population_size,
         "iterations": iterations,
         "converged": converged,
+        "global_optimum_certified": False,
         "relative_tolerance": MAX_BOX_RELATIVE_TOLERANCE,
         "relative_improvement_window": round(relative_improvement, 8),
         "angle_candidates": len(angles),
@@ -509,7 +576,223 @@ def optimize_maximum_rectangle(
     }
     return best, metadata
 
-def max_box_task(context: LayoutContext, rng: random.Random) -> TaskResult:
+
+def boundary_vertex_coordinates(geometry: Any) -> list[tuple[float, float]]:
+    """Return unique polygon-boundary vertices in stable coordinate order."""
+    vertices: set[tuple[float, float]] = set()
+    for polygon in geometry_polygons(geometry):
+        rings = [polygon.exterior, *polygon.interiors]
+        for ring in rings:
+            for x, y in list(ring.coords)[:-1]:
+                vertices.add((round(float(x), 12), round(float(y), 12)))
+    return sorted(vertices)
+
+
+def type_a_contact_candidates(free_space: Any) -> list[list[float]]:
+    """Enumerate the paper's Type-A opposite-corner square events exactly."""
+    candidates: list[list[float]] = []
+    vertices = boundary_vertex_coordinates(free_space)
+    allowed = free_space.buffer(GEOMETRY_TOLERANCE)
+    for first, second in combinations(vertices, 2):
+        dx = second[0] - first[0]
+        dy = second[1] - first[1]
+        diagonal = math.hypot(dx, dy)
+        if diagonal <= GEOMETRY_TOLERANCE:
+            continue
+        center = ((first[0] + second[0]) / 2.0, (first[1] + second[1]) / 2.0)
+        side = diagonal / math.sqrt(2.0)
+        angle = (math.atan2(dy, dx) - math.pi / 4.0) % math.pi
+        square = centered_rectangle(center, side, side, angle)
+        if allowed.covers(square):
+            candidates.append([center[0], center[1], side, side, angle])
+    return candidates
+
+
+def shrink_to_valid_rectangle(
+    free_space: Any, parameters: list[float]
+) -> list[float] | None:
+    """Convert a numerically near-feasible optimizer result to a valid witness."""
+    x, y, width, depth, angle = (float(value) for value in parameters)
+    if width <= 0.0 or depth <= 0.0 or not free_space.covers(Point(x, y)):
+        return None
+    allowed = free_space.buffer(GEOMETRY_TOLERANCE)
+    normalized = [x, y, width, depth, angle % math.pi]
+    if allowed.covers(rectangle_from_parameters(normalized)):
+        return normalized
+
+    low = 0.0
+    high = 1.0
+    for _ in range(52):
+        scale = (low + high) / 2.0
+        candidate = [x, y, width * scale, depth * scale, angle % math.pi]
+        if allowed.covers(rectangle_from_parameters(candidate)):
+            low = scale
+        else:
+            high = scale
+    if low <= GEOMETRY_TOLERANCE:
+        return None
+    return [x, y, width * low, depth * low, angle % math.pi]
+
+
+def shgo_contact_candidates(
+    free_space: Any, room: Polygon, initial_candidate: list[float]
+) -> tuple[list[list[float]], dict[str, Any]]:
+    """Find continuous contact configurations with deterministic SHGO."""
+    from scipy.optimize import minimize, shgo
+
+    min_x, min_y, max_x, max_y = room.bounds
+    cap = math.hypot(max_x - min_x, max_y - min_y)
+    minimum_side = max(cap * 1e-5, 1e-6)
+    area_tolerance = max(float(room.area), 1.0) * 1e-8
+
+    def objective(values: Any) -> float:
+        return -float(values[2] * values[3])
+
+    def containment_constraint(values: Any) -> float:
+        rectangle = centered_rectangle(
+            (float(values[0]), float(values[1])),
+            float(values[2]),
+            float(values[3]),
+            float(values[4]),
+        )
+        return area_tolerance - float(rectangle.difference(free_space).area)
+
+    bounds = [
+        (min_x, max_x),
+        (min_y, max_y),
+        (minimum_side, cap),
+        (minimum_side, cap),
+        (0.0, math.pi / 2.0),
+    ]
+    constraint = {"type": "ineq", "fun": containment_constraint}
+    result = shgo(
+        objective,
+        bounds,
+        constraints=constraint,
+        n=48,
+        iters=1,
+        sampling_method="simplicial",
+        minimizer_kwargs={"method": "SLSQP", "options": {"maxiter": 160}},
+        options={"maxev": 750, "minimize_every_iter": True},
+    )
+
+    local_start = list(initial_candidate)
+    local_start[4] %= math.pi
+    if local_start[4] >= math.pi / 2.0:
+        local_start[2], local_start[3] = local_start[3], local_start[2]
+        local_start[4] -= math.pi / 2.0
+    local_result = minimize(
+        objective,
+        local_start,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraint,
+        options={"maxiter": 200, "ftol": 1e-12},
+    )
+
+    local_minima = getattr(result, "xl", None)
+    raw_candidates = []
+    if getattr(result, "x", None) is not None:
+        raw_candidates.append(result.x)
+    if local_minima is not None:
+        raw_candidates.extend(local_minima)
+    if getattr(local_result, "x", None) is not None:
+        raw_candidates.append(local_result.x)
+    candidates = []
+    for raw in raw_candidates:
+        candidate = shrink_to_valid_rectangle(free_space, list(raw))
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates, {
+        "success": bool(result.success or local_result.success),
+        "global_success": bool(result.success),
+        "local_refinement_success": bool(local_result.success),
+        "message": str(result.message),
+        "iterations": int(getattr(result, "nit", 0)),
+        "function_evaluations": int(getattr(result, "nfev", 0)),
+        "local_function_evaluations": int(getattr(result, "nlfev", 0)),
+        "local_minima": 0 if local_minima is None else len(local_minima),
+        "sampling_method": "simplicial",
+    }
+
+
+def rectangle_contact_summary(free_space: Any, parameters: list[float]) -> dict[str, Any]:
+    """Report active corner and side contacts for an independently valid witness."""
+    rectangle = rectangle_from_parameters(parameters)
+    boundary = free_space.boundary
+    corners = list(rectangle.exterior.coords)[:-1]
+    corner_contacts = sum(Point(corner).distance(boundary) <= 1e-5 for corner in corners)
+    side_contacts = 0
+    vertices = boundary_vertex_coordinates(free_space)
+    for first, second in pairwise(list(rectangle.exterior.coords)):
+        side = LineString([first, second])
+        for vertex in vertices:
+            point = Point(vertex)
+            is_interior_side_contact = (
+                point.distance(side) <= 1e-5
+                and point.distance(Point(first)) > 1e-5
+                and point.distance(Point(second)) > 1e-5
+            )
+            if is_interior_side_contact:
+                side_contacts += 1
+                break
+    return {
+        "corner_contacts": corner_contacts,
+        "side_contacts": side_contacts,
+    }
+
+
+def optimize_maximum_rectangle(
+    free_space: Any, room: Polygon
+) -> tuple[list[float], dict[str, Any]]:
+    """Combine explicit contact events with deterministic continuous optimization."""
+    baseline, baseline_metadata = optimize_maximum_rectangle_candidates(
+        free_space, room
+    )
+    type_a = type_a_contact_candidates(free_space)
+    continuous, shgo_metadata = shgo_contact_candidates(free_space, room, baseline)
+    labeled_candidates = [
+        ("baseline", baseline),
+        *(("type_a_contact_event", candidate) for candidate in type_a),
+        *(("continuous_contact_optimization", candidate) for candidate in continuous),
+    ]
+    valid_candidates = [
+        (source, candidate)
+        for source, candidate in labeled_candidates
+        if candidate[2] > 0.0
+        and candidate[3] > 0.0
+        and free_space.buffer(GEOMETRY_TOLERANCE).covers(
+            rectangle_from_parameters(candidate)
+        )
+    ]
+    best_source, best = max(
+        valid_candidates,
+        key=lambda item: item[1][2] * item[1][3],
+        default=("baseline", baseline),
+    )
+    best_area = float(best[2] * best[3])
+    baseline_area = float(baseline[2] * baseline[3])
+    metadata = {
+        "algorithm": "contact_event_shgo",
+        "exact_contact_types_enumerated": ["A"],
+        "continuous_contact_types_optimized": ["B", "C", "D", "E", "F"],
+        "best_source": best_source,
+        "type_a_candidates": len(type_a),
+        "continuous_candidates": len(continuous),
+        "baseline_valid_lower_bound_m2": baseline_area,
+        "best_valid_lower_bound_m2": best_area,
+        "improvement_over_baseline_m2": best_area - baseline_area,
+        "converged": bool(shgo_metadata["success"]),
+        "global_optimum_certified": False,
+        "relative_tolerance": MAX_BOX_RELATIVE_TOLERANCE,
+        "relative_improvement_window": 0.0 if shgo_metadata["success"] else math.inf,
+        "contacts": rectangle_contact_summary(free_space, best),
+        "shgo": shgo_metadata,
+        "baseline": baseline_metadata,
+    }
+    return best, metadata
+
+def max_box_task(context: LayoutContext) -> TaskResult:
     blockers = [
         entity_polygon(entity)
         for entity in context.entities
@@ -525,15 +808,16 @@ def max_box_task(context: LayoutContext, rng: random.Random) -> TaskResult:
         answer = 0.0
         best = [0.0, 0.0, 0.0, 0.0, 0.0]
         metadata = {
-            "algorithm": "deterministic_differential_evolution",
+            "algorithm": "deterministic_candidate_refinement",
             "converged": True,
+            "global_optimum_certified": True,
             "iterations": 0,
             "relative_tolerance": MAX_BOX_RELATIVE_TOLERANCE,
             "relative_improvement_window": 0.0,
             "best_valid_lower_bound_m2": 0.0,
         }
     else:
-        best, metadata = optimize_maximum_rectangle(free_space, context.room, rng)
+        best, metadata = optimize_maximum_rectangle(free_space, context.room)
         answer = float(best[2] * best[3])
 
     return TaskResult(
@@ -575,32 +859,21 @@ def placement_free_space(context: LayoutContext) -> Any:
         else make_valid(context.room.difference(blocker_union))
     )
 
+
 def configuration_space_region(
     free_space: Any, width: float, depth: float, angle: float
 ) -> Any:
-    """Return the corner-constraint center region for a rotated rectangle."""
-    cosine, sine = math.cos(angle), math.sin(angle)
-    offsets = []
-    for x, y in (
-        (-width / 2.0, -depth / 2.0),
-        (width / 2.0, -depth / 2.0),
-        (width / 2.0, depth / 2.0),
-        (-width / 2.0, depth / 2.0),
-    ):
-        offsets.append((x * cosine - y * sine, x * sine + y * cosine))
-    region = None
-    for offset_x, offset_y in offsets:
-        translated = translate(free_space, xoff=-offset_x, yoff=-offset_y)
-        region = translated if region is None else region.intersection(translated)
-        if region.is_empty:
-            break
-    return make_valid(region) if region is not None else Polygon()
+    """Return the CGAL Minkowski-erosion center region for a rectangle."""
+    shape = centered_rectangle((0.0, 0.0), width, depth, angle)
+    inset_shape = shape.buffer(-GEOMETRY_TOLERANCE, join_style=2)
+    if isinstance(inset_shape, Polygon) and not inset_shape.is_empty:
+        shape = inset_shape
+    return erode_geometry(free_space, shape)
 
 def placement_witness(
     free_space: Any,
     width: float,
     depth: float,
-    rng: random.Random,
 ) -> dict[str, Any] | None:
     angles = set(edge_angles(free_space))
     angles.update(round(index * math.pi / 48, 10) for index in range(48))
@@ -608,7 +881,7 @@ def placement_witness(
         region = configuration_space_region(free_space, width, depth, angle)
         if region.is_empty:
             continue
-        for center in sample_points_in_geometry(region, rng, 16):
+        for center in deterministic_points_in_geometry(region, 32):
             rectangle = centered_rectangle(center, width, depth, angle)
             if free_space.buffer(GEOMETRY_TOLERANCE).covers(rectangle):
                 return {

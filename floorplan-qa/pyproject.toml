@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "huggingface-hub>=0.33.0",
     "mlx-lm>=0.31.3",
+    "scipy>=1.13",
     "shapely>=2.0.0",
 ]
 
@@ -17,8 +18,11 @@ generate-floorplan-qa = "floorplan_qa.generate_questions:main"
 evaluate-floorplan-qa-generation = "floorplan_qa.quality_metrics:main"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = [
+    "pybind11>=2.13",
+    "scikit-build-core>=0.11",
+]
+build-backend = "scikit_build_core.build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/floorplan_qa"]
+[tool.scikit-build]
+wheel.packages = ["src/floorplan_qa"]

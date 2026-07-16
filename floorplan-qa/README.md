@@ -3,6 +3,26 @@
 Utilities for downloading and working with the
 [FloorplanQA layouts dataset](https://huggingface.co/datasets/OldDelorean/FloorplanQA-Layouts).
 
+## Install
+
+Placement and repositioning use a native CGAL configuration-space extension.
+On macOS, install CGAL and its native dependencies before syncing the Python
+environment:
+
+```shell
+brew install cgal
+uv sync
+```
+
+On Linux, install CGAL 6.x, a C++17 compiler, CMake, Boost headers, and an exact
+number backend such as GMP/MPFR through the system package manager, then run
+`uv sync`. The Python environment and lockfile remain managed by uv;
+`scikit-build-core` and `pybind11` compile the extension during `uv sync`.
+
+CGAL's 2D Minkowski Sums package is GPL-licensed. Review GPL compatibility
+before distributing this extension or its compiled wheels; CGAL's commercial
+license is the alternative for incompatible distribution terms.
+
 ## Download the dataset
 
 From this directory, run:
@@ -35,8 +55,11 @@ other than `main`.
 ## Generate training questions
 
 Generate all eight deterministic QA tasks for each requested layout. Layouts
-are drawn by a seeded uniform shuffle over the complete released corpus; the
-generator does not force room-source or answer-class balance:
+are drawn by a seeded uniform shuffle over the complete released corpus. The
+layout count must be even: every Boolean task is deterministically stratified
+to contain exactly 50% `True` and 50% `False` reference answers. Placement is
+currently the only Boolean task; layouts that cannot produce a witnessed
+positive or certified negative for their assigned class are skipped:
 
 ```shell
 ./scripts/generate_questions.sh 20 1
@@ -59,13 +82,21 @@ split is included in each layout filename:
 ./scripts/generate_questions.sh 20 7 val
 ```
 
+For a negative Placement target, the generator first tries the fixed catalog.
+If none of its rectangles has an area-based impossibility certificate, it
+deterministically scales the largest catalog rectangle until its area exceeds
+the largest connected free-space component. The displayed dimensions are the
+same three-decimal values used by the solver, so the negative remains
+independently checkable from the emitted question.
+
 Each record includes task parameters, a typed reference answer, fixed-template
 prompt messages, input-validation results, solver settings, convergence data,
-and version provenance. The `paper-v2` implementation uses continuous
-first-collision repositioning, configuration-space placement with exact
-witnesses or certified negatives, deterministic global Max Box search, and
-0.15 m-clearance grid A* for shortest paths. Visibility intentionally uses
-actual polygon intersections rather than paper-style bounding boxes.
+and version provenance. The `paper-v6-cgal-configuration-space`
+implementation uses CGAL Minkowski configuration spaces for placement and
+first-contact repositioning, exact witnesses or area-certified Placement
+negatives, contact-event plus deterministic SHGO Max Box search, and 0.15
+m-clearance grid A* for shortest paths. Visibility intentionally uses actual
+polygon intersections rather than paper-style bounding boxes.
 
 ## Evaluate generation quality
 
@@ -83,8 +114,8 @@ cp datasets/train-qa/questions.jsonl /tmp/questions-first.jsonl
 
 The hard gates are documented in
 [`question-gen.md`](question-gen.md#quality-metrics-and-validation).
-The evaluator also reports the unforced room-source and Placement-answer
-distributions as advisory measurements.
+The evaluator also reports the unforced room-source distribution and verifies
+that regenerated records retain their assigned Boolean-answer targets.
 
 ## V1: evaluate with the full raw context
 
@@ -434,6 +465,208 @@ A stronger follow-up dataset should deliberately include both `True` and
 that are and are not dimensionally dominated by the maximum-area witness. The
 completed ignored report is
 `datasets/evaluations/qwen3.5-4b-random-other-placement-seed-0-10.json`.
+
+#### Balanced Boolean Placement agent check
+
+The balanced generator follow-up used 20 layouts selected with generation seed
+7 and emitted 20 Placement questions: exactly 10 `True` and 10 `False`. The
+explicit-file tool agent used Ollama `qwen3.5:4b`, agent seed 0, temperature 0,
+thinking disabled, eight turns, and a 2,500-generated-token budget per
+question.
+
+The first agent run scored **19/20**. It correctly answered all 10 negative
+questions and 9 of 10 positive questions, with no formatting or runtime
+failures. The miss was not a model-routing error: for
+`placement-kitchen-253`, the model called `find_space_with_size(2.4, 1.2,
+kitchen-253-test.json)`, received `False`, and faithfully returned `False`,
+while the generator had recorded `True`.
+
+The mismatch came from the two callers seeding sampled placement-center search
+differently. The generator used its global generation seed, while
+`find_space_with_size` used a query-specific seed. Both called the same geometry
+function, but a narrow feasible region could therefore be sampled by one caller
+and missed by the other. The temporary shared-seed repair reproduced the
+generator's answer, but it coupled a real tool to hidden dataset provenance and
+was therefore unsuitable as the final design.
+
+After regenerating the same seeded 20-layout set, the corrected run scored
+**20/20**: 10/10 `True` and 10/10 `False`, with zero formatting failures and
+zero runtime errors. It completed in 195.597 seconds, generated 4,541 tokens
+over 45 model calls, and made 25 tool calls. Every question called
+`find_space_with_size`; five first called `inspect_room`. The raw before and
+after reports remain ignored at
+`datasets/evaluations/qwen3.5-4b-balanced-placement-seed-7-before-shared-seed.json`
+and
+`datasets/evaluations/qwen3.5-4b-balanced-placement-seed-7-after-shared-seed.json`.
+
+#### Seed-independent geometry follow-up
+
+The shared placement seed has now been removed. Geometry answers depend only
+on the layout polygons and the visible query dimensions. Both question
+generation and `find_space_with_size` enumerate the same deterministic
+configuration-space candidates: one representative per connected component,
+representatives from a polygon triangulation, and a fixed Halton
+low-discrepancy sequence. Every `True` answer includes a placement center and
+rotation that passes an independent full-rectangle containment check. The
+former `kitchen-253` query for a 2.4 by 1.2 meter rectangle now consistently
+returns a valid witness centered at `(3.1875, 2.48)` and rotated 90 degrees,
+without reading a seed, source group, split, or layout ID.
+
+A failed finite search is not accepted as proof of `False`. The tool returns
+`False` only when the query rectangle's area exceeds the area of every
+connected free-space component. Otherwise it reports that the result is
+inconclusive. The balanced generator follows the same rule: positives require
+a checked witness and negatives require the area certificate.
+
+Max Box no longer consumes a generation seed either. Its initial centers come
+from the same deterministic geometry candidates, and its population mutation
+and refinement schedule is fixed. On `kitchen-253`, generation seeds 0, 7, and
+99 all produced the identical 4.6513739646 square-meter witness. This removes
+the generator/tool seed-alignment problem, but the result remains a valid
+numerical lower bound rather than a proof of the global maximum.
+
+The Max Box follow-up implements the paper's exact Type-A contact event: every
+pair of polygon-boundary vertices is tested as the opposite corners of a
+square, and every resulting square is independently checked against the full
+free-space polygon, including holes. For the remaining Type B-F continuous
+contact configurations, the solver uses SciPy's deterministic simplicial
+homology global optimizer (SHGO) over center, width, length, and rotation, with
+rectangle-outside-free-space area as a nonlinear constraint. Every optimizer
+result is shrunk if necessary and then independently checked by Shapely before
+it can become the answer. The previous deterministic candidate-refinement
+solver remains a valid lower-bound fallback and a feasible starting point for
+local contact refinement.
+
+No available library implements the complete arbitrary-orientation six-type
+event map from
+[Maximum-Area Rectangles in a Simple Polygon](https://arxiv.org/abs/1910.08686).
+CGAL supports convex inscribed k-gons and axis-aligned empty rectangles;
+`largestinteriorrectangle` is an axis-aligned binary-grid routine; and PyAEDT's
+arbitrary-orientation implementation uses a finite quasi-lattice. Consequently,
+the current hybrid explicitly marks `global_optimum_certified: false`: it
+implements exact Type A events and deterministic continuous optimization for
+Types B-F, but not the paper's full staircase/ray-shooting event data
+structures.
+
+The exact target for fixed-aspect placement is the largest-similar-polygon
+algorithm described in
+[Largest similar copies of convex polygons amidst polygonal obstacles](https://arxiv.org/abs/2012.06978).
+
+#### CGAL configuration-space before/after
+
+Placement and repositioning now share a native CGAL primitive. The extension
+forms the complement of free space inside a safely expanded domain, computes
+its Minkowski sum with the reflected query footprint, and subtracts that
+forbidden reference-point region from the room domain. Placement searches the
+resulting valid-center regions. Repositioning intersects a directional ray
+with the valid region containing the moving object's current reference point
+and returns the first-contact distance.
+
+The before and after comparison replayed the same 75 applicable records from
+the current 300-question JSONL: 37 Placement and 38 Repositioning records. It
+called the real `find_space_with_size` and `test_movement` tools with the
+recorded visible arguments; it did not run a language model.
+
+| Metric | Shapely custom solver | CGAL configuration space |
+|---|---:|---:|
+| Placement answer matches | 37/37 | 37/37 |
+| Repositioning rounded-distance matches | 38/38 | 38/38 |
+| Placement inconclusive results | 0 | 0 |
+| Snapshot runtime | 0.508 s | 0.437 s |
+
+All 38 Repositioning output strings remained byte-identical. Twenty-five
+Placement strings changed because CGAL selected a different valid center or
+rotation; every Boolean answer remained `True` and every returned pose passed
+the independent full-rectangle check. The existing 300-question file contains
+no negative Placement records, so regression tests additionally cover an
+impossible rectangle and a case where all four corners are clear but the
+rectangle body crosses an obstacle.
+
+The first CGAL replay exposed an exact-contact edge case: eleven objects began
+in zero-width configuration-space corridors while touching cabinets on both
+sides, and CGAL's regularized polygon set discarded those lower-dimensional
+corridors. The final implementation insets the moving/query footprint by the
+declared 1e-7-meter geometry tolerance before forming the Minkowski sum. It
+also backs a reported movement contact off by 1e-5 meters, matching the former
+solver's lower-bound convention and keeping the independently translated final
+pose valid. This restored all 38/38 Repositioning matches, including movement
+away from an initial boundary contact.
+
+The ignored detailed reports are
+`datasets/evaluations/cgal-geometry-before.json` and
+`datasets/evaluations/cgal-geometry-after.json`. The reproducible comparison
+driver is `scripts/compare_geometry_backends.py`. A clean `uv sync --reinstall`
+successfully rebuilt the native extension, all 65 unit tests passed, and
+`uv build --wheel` produced a wheel containing the compiled CGAL module. The
+local macOS wheel links Homebrew GMP/MPFR and therefore still requires the
+documented native runtime libraries; it is not a self-contained portable wheel.
+
+#### CGAL 50-question tool-agent evaluation
+
+After commit `253cc8a`, an eight-layout seed-0 pool was regenerated and reduced
+to a deterministic, task-stratified 50-record set in source order. Pair
+Distance and Free Space contain seven records each; the other six task types
+contain six records each. Placement is exactly balanced at three `True` and
+three `False` answers. All 50 records parsed successfully, regenerated
+deterministically, referenced available layout files, and passed their
+task-specific geometry-witness checks before model evaluation.
+
+Ollama `qwen3.5:4b` evaluated the set with the explicit-file tools, agent seed
+0, temperature 0, thinking disabled, a shared 2,500-generated-token budget per
+question, at most eight turns, and five transient-connection retries. The run
+completed under `caffeinate` and its wrapper exited normally.
+
+| Task | Correct | Total |
+|---|---:|---:|
+| Pair Distance | 7 | 7 |
+| Free Space | 5 | 7 |
+| View Angle | 6 | 6 |
+| Repositioning | 6 | 6 |
+| Max Box | 6 | 6 |
+| Placement | 6 | 6 |
+| Shortest Path | 6 | 6 |
+| Visibility | 6 | 6 |
+| **Overall** | **48** | **50** |
+
+The 96% run took 791.777 seconds, generated 17,475 tokens over 139 model calls,
+and made 88 tool calls. It had no formatting failures or runtime errors. Both
+CGAL-backed tasks scored 100%: Placement was 6/6, including all three negative
+cases, and Repositioning was 6/6.
+
+Both failures were Free Space arithmetic errors rather than geometry or tool
+errors. For `free-space-bedroom-135`, `inspect_room` returned 18.240 square
+meters and `occupied_floor_area` returned 9.710, but the model called 9.710 the
+non-occupied area instead of subtracting to obtain 8.530. For
+`free-space-bedroom-245`, it similarly returned the occupied 8.045 rather than
+subtracting it from 21.750 to obtain 13.705. In both cases the model had all
+required values, omitted the calculator call, and confidently misread
+"occupied" as "non-occupied." The other five Free Space questions performed
+the subtraction correctly.
+
+The complete ignored report is
+`datasets/evaluations/qwen3.5-4b-cgal-seed-0-50.json`.
+
+A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
+exact 10/10 Placement balance, and passed schema, prompt, reproducibility,
+geometry-witness, placement-certificate, path, Max Box convergence, and
+byte-for-byte determinism checks at 100%. Complete-layout yield was 20/22
+(90.9%), below the 95% quality gate solely because two released bedroom layouts
+contain a degenerate `mirror` polygon; this is an input-data validation issue,
+not a geometry-seed failure. Directly replaying the generated visible arguments
+through the agent runtime matched all 20/20 Placement answers and all 20/20
+rounded Max Box answers.
+
+On the same 20-layout seed-7 sample, the contact-event/SHGO solver changed 9 of
+20 Max Box references while retaining valid witnesses for all 20. Seven changes
+were larger than 2%; the largest improvements were HSSD 34 (+79.3%), HSSD 88
+(+73.0%), kitchen 523 (+32.8%), living room 117 (+12.9%), living room 146
+(+127.9%), bedroom 207 (+4.6%), and HSSD 106 (+5.3%). SHGO found a global
+minimizer pool directly on 19 layouts; bedroom 390 had a narrow feasible set,
+so its already-valid baseline witness was locally refined instead. Generation
+plus all quality checks completed in about 23 seconds. Every gate passed at
+100% except the pre-existing complete-layout-yield gate caused by the two
+degenerate `mirror` polygons. Repeating the complete generation produced a
+byte-identical JSONL file and a 100% deterministic-match score.
 
 Both model backends accept a QA JSONL path, remove reference/assistant messages
 from each record, run one example at a time, print a per-example verdict, and
