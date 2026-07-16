@@ -3,6 +3,26 @@
 Utilities for downloading and working with the
 [FloorplanQA layouts dataset](https://huggingface.co/datasets/OldDelorean/FloorplanQA-Layouts).
 
+## Install
+
+Placement and repositioning use a native CGAL configuration-space extension.
+On macOS, install CGAL and its native dependencies before syncing the Python
+environment:
+
+```shell
+brew install cgal
+uv sync
+```
+
+On Linux, install CGAL 6.x, a C++17 compiler, CMake, Boost headers, and an exact
+number backend such as GMP/MPFR through the system package manager, then run
+`uv sync`. The Python environment and lockfile remain managed by uv;
+`scikit-build-core` and `pybind11` compile the extension during `uv sync`.
+
+CGAL's 2D Minkowski Sums package is GPL-licensed. Review GPL compatibility
+before distributing this extension or its compiled wheels; CGAL's commercial
+license is the alternative for incompatible distribution terms.
+
 ## Download the dataset
 
 From this directory, run:
@@ -71,9 +91,9 @@ independently checkable from the emitted question.
 
 Each record includes task parameters, a typed reference answer, fixed-template
 prompt messages, input-validation results, solver settings, convergence data,
-and version provenance. The `paper-v5-contact-event-shgo`
-implementation uses continuous first-collision repositioning, seed-independent
-configuration-space placement with exact witnesses or area-certified
+and version provenance. The `paper-v6-cgal-configuration-space`
+implementation uses CGAL Minkowski configuration spaces for placement and
+first-contact repositioning, exact witnesses or area-certified Placement
 negatives, contact-event plus deterministic SHGO Max Box search, and 0.15
 m-clearance grid A* for shortest paths. Visibility intentionally uses actual
 polygon intersections rather than paper-style bounding boxes.
@@ -531,6 +551,55 @@ structures.
 The exact target for fixed-aspect placement is the largest-similar-polygon
 algorithm described in
 [Largest similar copies of convex polygons amidst polygonal obstacles](https://arxiv.org/abs/2012.06978).
+
+#### CGAL configuration-space before/after
+
+Placement and repositioning now share a native CGAL primitive. The extension
+forms the complement of free space inside a safely expanded domain, computes
+its Minkowski sum with the reflected query footprint, and subtracts that
+forbidden reference-point region from the room domain. Placement searches the
+resulting valid-center regions. Repositioning intersects a directional ray
+with the valid region containing the moving object's current reference point
+and returns the first-contact distance.
+
+The before and after comparison replayed the same 75 applicable records from
+the current 300-question JSONL: 37 Placement and 38 Repositioning records. It
+called the real `find_space_with_size` and `test_movement` tools with the
+recorded visible arguments; it did not run a language model.
+
+| Metric | Shapely custom solver | CGAL configuration space |
+|---|---:|---:|
+| Placement answer matches | 37/37 | 37/37 |
+| Repositioning rounded-distance matches | 38/38 | 38/38 |
+| Placement inconclusive results | 0 | 0 |
+| Snapshot runtime | 0.508 s | 0.437 s |
+
+All 38 Repositioning output strings remained byte-identical. Twenty-five
+Placement strings changed because CGAL selected a different valid center or
+rotation; every Boolean answer remained `True` and every returned pose passed
+the independent full-rectangle check. The existing 300-question file contains
+no negative Placement records, so regression tests additionally cover an
+impossible rectangle and a case where all four corners are clear but the
+rectangle body crosses an obstacle.
+
+The first CGAL replay exposed an exact-contact edge case: eleven objects began
+in zero-width configuration-space corridors while touching cabinets on both
+sides, and CGAL's regularized polygon set discarded those lower-dimensional
+corridors. The final implementation insets the moving/query footprint by the
+declared 1e-7-meter geometry tolerance before forming the Minkowski sum. It
+also backs a reported movement contact off by 1e-5 meters, matching the former
+solver's lower-bound convention and keeping the independently translated final
+pose valid. This restored all 38/38 Repositioning matches, including movement
+away from an initial boundary contact.
+
+The ignored detailed reports are
+`datasets/evaluations/cgal-geometry-before.json` and
+`datasets/evaluations/cgal-geometry-after.json`. The reproducible comparison
+driver is `scripts/compare_geometry_backends.py`. A clean `uv sync --reinstall`
+successfully rebuilt the native extension, all 65 unit tests passed, and
+`uv build --wheel` produced a wheel containing the compiled CGAL module. The
+local macOS wheel links Homebrew GMP/MPFR and therefore still requires the
+documented native runtime libraries; it is not a self-contained portable wheel.
 
 A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
 exact 10/10 Placement balance, and passed schema, prompt, reproducibility,

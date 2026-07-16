@@ -18,6 +18,8 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import linemerge, polygonize, triangulate, unary_union
 from shapely.validation import make_valid
 
+from .cgal_geometry import erode_geometry
+
 GEOMETRY_TOLERANCE = 1e-7
 
 REPOSITION_TOLERANCE = 1e-5
@@ -238,55 +240,74 @@ def maximum_slide_distance(
     direction: tuple[float, float],
     tolerance: float = REPOSITION_TOLERANCE,
 ) -> float:
-    """Continuously bracket the first collision using a monotone swept volume."""
+    """Return first contact along a CGAL configuration-space ray."""
     obstacle_union = union_polygons(obstacles)
     if not room.covers(moving):
         return 0.0
     if obstacle_union is not None and moving.intersection(obstacle_union).area > 1e-8:
         return 0.0
 
-    def swept_volume(distance: float) -> Any:
-        moved = translate(
-            moving,
-            xoff=direction[0] * distance,
-            yoff=direction[1] * distance,
-        )
-        pieces: list[Any] = [moving, moved]
-        for first, second in pairwise(list(moving.exterior.coords)):
-            shifted_first = (
-                first[0] + direction[0] * distance,
-                first[1] + direction[1] * distance,
-            )
-            shifted_second = (
-                second[0] + direction[0] * distance,
-                second[1] + direction[1] * distance,
-            )
-            pieces.append(Polygon([first, second, shifted_second, shifted_first]))
-        return unary_union(pieces)
-
-    def collision_by(distance: float) -> bool:
-        swept = swept_volume(distance)
-        if swept.difference(room).area > GEOMETRY_TOLERANCE:
-            return True
-        return bool(
-            obstacle_union is not None
-            and swept.intersection(obstacle_union).area > GEOMETRY_TOLERANCE
-        )
+    free_space = (
+        room
+        if obstacle_union is None
+        else make_valid(room.difference(obstacle_union))
+    )
+    reference = (float(moving.centroid.x), float(moving.centroid.y))
+    local_shape = translate(moving, xoff=-reference[0], yoff=-reference[1])
+    inset_shape = local_shape.buffer(-GEOMETRY_TOLERANCE, join_style=2)
+    if isinstance(inset_shape, Polygon) and not inset_shape.is_empty:
+        local_shape = inset_shape
+    feasible = erode_geometry(free_space, local_shape)
+    if feasible.is_empty:
+        return 0.0
 
     min_x, min_y, max_x, max_y = room.bounds
-    low = 0.0
-    high = math.hypot(max_x - min_x, max_y - min_y) + max(
-        max_x - min_x, max_y - min_y
+    ray_length = 2.0 * math.hypot(max_x - min_x, max_y - min_y) + max(
+        moving.bounds[2] - moving.bounds[0], moving.bounds[3] - moving.bounds[1]
     )
-    if not collision_by(high):
-        raise ValueError("could not bracket repositioning collision")
-    while high - low > tolerance:
-        middle = (low + high) / 2.0
-        if collision_by(middle):
-            high = middle
-        else:
-            low = middle
-    return low
+    ray = LineString(
+        [
+            reference,
+            (
+                reference[0] + direction[0] * ray_length,
+                reference[1] + direction[1] * ray_length,
+            ),
+        ]
+    )
+    allowed = ray.intersection(feasible)
+    intervals: list[tuple[float, float]] = []
+
+    def collect_intervals(geometry: Any) -> None:
+        if geometry is None or geometry.is_empty:
+            return
+        if isinstance(geometry, LineString):
+            projections = [
+                (x - reference[0]) * direction[0]
+                + (y - reference[1]) * direction[1]
+                for x, y, *_ in geometry.coords
+            ]
+            intervals.append((min(projections), max(projections)))
+            return
+        for part in getattr(geometry, "geoms", []):
+            collect_intervals(part)
+
+    collect_intervals(allowed)
+    intervals.sort()
+    reachable_end = 0.0
+    found_start = False
+    for start, end in intervals:
+        if end < -tolerance:
+            continue
+        if not found_start:
+            if start > tolerance:
+                break
+            found_start = True
+            reachable_end = max(0.0, end)
+            continue
+        if start > reachable_end + tolerance:
+            break
+        reachable_end = max(reachable_end, end)
+    return max(0.0, reachable_end - tolerance)
 
 def rectangle_from_extents(
     center: tuple[float, float],
@@ -842,23 +863,12 @@ def placement_free_space(context: LayoutContext) -> Any:
 def configuration_space_region(
     free_space: Any, width: float, depth: float, angle: float
 ) -> Any:
-    """Return the corner-constraint center region for a rotated rectangle."""
-    cosine, sine = math.cos(angle), math.sin(angle)
-    offsets = []
-    for x, y in (
-        (-width / 2.0, -depth / 2.0),
-        (width / 2.0, -depth / 2.0),
-        (width / 2.0, depth / 2.0),
-        (-width / 2.0, depth / 2.0),
-    ):
-        offsets.append((x * cosine - y * sine, x * sine + y * cosine))
-    region = None
-    for offset_x, offset_y in offsets:
-        translated = translate(free_space, xoff=-offset_x, yoff=-offset_y)
-        region = translated if region is None else region.intersection(translated)
-        if region.is_empty:
-            break
-    return make_valid(region) if region is not None else Polygon()
+    """Return the CGAL Minkowski-erosion center region for a rectangle."""
+    shape = centered_rectangle((0.0, 0.0), width, depth, angle)
+    inset_shape = shape.buffer(-GEOMETRY_TOLERANCE, join_style=2)
+    if isinstance(inset_shape, Polygon) and not inset_shape.is_empty:
+        shape = inset_shape
+    return erode_geometry(free_space, shape)
 
 def placement_witness(
     free_space: Any,

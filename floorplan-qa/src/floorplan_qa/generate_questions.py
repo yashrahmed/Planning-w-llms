@@ -43,7 +43,7 @@ DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "datasets" / "train-qa"
 OUTPUT_FILENAME = "questions.jsonl"
 GENERATION_REPORT_FILENAME = "generation-report.json"
 DATASET_SPLITS = ("train", "test", "val")
-SOLVER_VERSION = "paper-v5-contact-event-shgo"
+SOLVER_VERSION = "paper-v6-cgal-configuration-space"
 TASKS = (
     "pair_distance",
     "free_space",
@@ -341,8 +341,9 @@ def repositioning_task(context: LayoutContext, rng: random.Random) -> TaskResult
         ),
         output_description="a distance in meters rounded to three decimal places",
         solver_metadata={
-            "algorithm": "continuous_swept_volume_bisection",
-            "distance_tolerance_m": REPOSITION_TOLERANCE,
+            "algorithm": "cgal_configuration_space_ray_contact",
+            "geometry_backend": "CGAL exact constructions",
+            "contact_backoff_m": REPOSITION_TOLERANCE,
         },
     )
 
@@ -437,7 +438,8 @@ def placement_task(
         ),
         output_description="exactly True or False",
         solver_metadata={
-            "algorithm": "deterministic_configuration_space_with_exact_witness",
+            "algorithm": "cgal_minkowski_configuration_space_with_exact_witness",
+            "geometry_backend": "CGAL exact constructions",
             "rotation_step_degrees": 3.75,
             "answer_certified": witness is not None or certificate is not None,
             "parameter_selection": (

@@ -155,12 +155,12 @@ interval and then refine it with bisection. It must find the first collision,
 not merely test whether a later pose is free, because an object cannot pass
 through an intervening obstacle.
 
-The new generator should not use the 0.01 meter stepping algorithm for its
-reference answer. Compute the earliest collision distance continuously from
-the moving polygon against the room boundary and blocking polygons. If a fully
-analytic solution is impractical for a geometry, bracket the first collision
-and refine it deterministically with bisection to a declared distance
-tolerance.
+The generator does not use the 0.01 meter stepping algorithm. It uses CGAL
+Minkowski sums to erode free space by the translated object's reflected
+footprint, producing the valid region for the object's reference point. A ray
+from the current reference point in the requested direction ends at the first
+configuration-space boundary. The solver returns a lower contact bound by
+backing off 1e-5 meters so the independently checked final pose remains valid.
 
 ### Max box
 
@@ -221,13 +221,12 @@ solver's convergence tolerance.
 5. Return `True` if the valid-center region is nonempty at any angle; otherwise
    return `False`.
 
-Use adaptive rotation refinement rather than a fixed set of center and angle
-samples. Shapely should provide the final containment and collision decision
-for every candidate pose. A deterministic global optimizer may be used as a
-fallback to search `(x, y, theta)`, but configuration-space feasibility is
-preferred because a nonempty valid-center region directly witnesses a valid
-placement. A sampled solver may safely establish `True` by finding a valid
-pose, but it cannot justify `False` merely because its finite samples failed.
+For each edge-derived angle and each angle on the fixed 3.75-degree grid, CGAL
+computes the complete two-dimensional valid-center region using exact
+constructions and Minkowski sums. Shapely independently checks the final
+rectangle pose. The angle set is still finite, so the solver may safely
+establish `True` from a witnessed pose but cannot justify `False` merely because
+all evaluated angles were empty.
 The implementation should report its angular and geometric tolerances and
 retain a witness pose for every `True` answer.
 
