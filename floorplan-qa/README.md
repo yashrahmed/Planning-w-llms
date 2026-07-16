@@ -601,6 +601,51 @@ successfully rebuilt the native extension, all 65 unit tests passed, and
 local macOS wheel links Homebrew GMP/MPFR and therefore still requires the
 documented native runtime libraries; it is not a self-contained portable wheel.
 
+#### CGAL 50-question tool-agent evaluation
+
+After commit `253cc8a`, an eight-layout seed-0 pool was regenerated and reduced
+to a deterministic, task-stratified 50-record set in source order. Pair
+Distance and Free Space contain seven records each; the other six task types
+contain six records each. Placement is exactly balanced at three `True` and
+three `False` answers. All 50 records parsed successfully, regenerated
+deterministically, referenced available layout files, and passed their
+task-specific geometry-witness checks before model evaluation.
+
+Ollama `qwen3.5:4b` evaluated the set with the explicit-file tools, agent seed
+0, temperature 0, thinking disabled, a shared 2,500-generated-token budget per
+question, at most eight turns, and five transient-connection retries. The run
+completed under `caffeinate` and its wrapper exited normally.
+
+| Task | Correct | Total |
+|---|---:|---:|
+| Pair Distance | 7 | 7 |
+| Free Space | 5 | 7 |
+| View Angle | 6 | 6 |
+| Repositioning | 6 | 6 |
+| Max Box | 6 | 6 |
+| Placement | 6 | 6 |
+| Shortest Path | 6 | 6 |
+| Visibility | 6 | 6 |
+| **Overall** | **48** | **50** |
+
+The 96% run took 791.777 seconds, generated 17,475 tokens over 139 model calls,
+and made 88 tool calls. It had no formatting failures or runtime errors. Both
+CGAL-backed tasks scored 100%: Placement was 6/6, including all three negative
+cases, and Repositioning was 6/6.
+
+Both failures were Free Space arithmetic errors rather than geometry or tool
+errors. For `free-space-bedroom-135`, `inspect_room` returned 18.240 square
+meters and `occupied_floor_area` returned 9.710, but the model called 9.710 the
+non-occupied area instead of subtracting to obtain 8.530. For
+`free-space-bedroom-245`, it similarly returned the occupied 8.045 rather than
+subtracting it from 21.750 to obtain 13.705. In both cases the model had all
+required values, omitted the calculator call, and confidently misread
+"occupied" as "non-occupied." The other five Free Space questions performed
+the subtraction correctly.
+
+The complete ignored report is
+`datasets/evaluations/qwen3.5-4b-cgal-seed-0-50.json`.
+
 A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
 exact 10/10 Placement balance, and passed schema, prompt, reproducibility,
 geometry-witness, placement-certificate, path, Max Box convergence, and
