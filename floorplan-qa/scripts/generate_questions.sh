@@ -16,7 +16,12 @@ if [[ ! ${SEED} =~ ^-?[0-9]+$ ]]; then
 fi
 
 if [[ ! $1 =~ ^[1-9][0-9]*$ ]]; then
-  echo "Error: number-of-examples must be a positive integer." >&2
+  echo "Error: number-of-layouts must be a positive integer." >&2
+  exit 2
+fi
+
+if (( $1 % 2 != 0 )); then
+  echo "Error: number-of-layouts must be even for exact Boolean answer balance." >&2
   exit 2
 fi
 

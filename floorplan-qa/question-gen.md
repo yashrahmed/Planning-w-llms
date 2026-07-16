@@ -178,21 +178,25 @@ points, 12 angles, coordinate-ascent growth, seed 42, and a 30-second budget.
 A sparse center-and-angle sample can miss a larger valid rectangle between
 samples and therefore underestimate the reference answer.
 
-Use a deterministic global-optimization pipeline instead:
+The exact target is the contact-event algorithm in
+[Maximum-Area Rectangles in a Simple Polygon](https://arxiv.org/abs/1910.08686),
+which handles arbitrary orientations and polygonal domains with holes. Until
+that algorithm is implemented, use a seed-independent numerical pipeline:
 
 1. Parameterize a rectangle by center, width, height, and rotation.
-2. Maximize `width * height` with a global optimizer such as differential
-   evolution over bounds derived from the room.
+2. Seed the search with connected-component representatives, polygon
+   triangulation representatives, and a fixed Halton sequence.
 3. Use exact Shapely containment and collision checks as hard feasibility
    tests for every proposed candidate.
 4. Locally refine the best valid candidates and adaptively subdivide promising
    position and rotation ranges.
 5. Stop at a documented convergence tolerance and record the best valid lower
-   bound, tolerance, iteration count, seed, and convergence status.
+   bound, tolerance, iteration count, and convergence status. A layout or
+   generation seed must never affect the search.
 
-The result is still a numerical optimum rather than a symbolic proof of the
-global maximum, so the prompt and provenance must not claim greater precision
-than the solver's convergence tolerance.
+The result is still a numerical lower bound rather than a symbolic proof of the
+global maximum, so the tool description and provenance must not claim greater
+precision than the solver's convergence tolerance.
 
 ### Placement
 
@@ -223,9 +227,23 @@ pose, but it cannot justify `False` merely because its finite samples failed.
 The implementation should report its angular and geometric tolerances and
 retain a witness pose for every `True` answer.
 
+The exact deterministic target is the largest-similar-convex-polygon algorithm
+in
+[Largest similar copies of convex polygons amidst polygonal obstacles](https://arxiv.org/abs/2012.06978).
+For a requested rectangle it computes the largest feasible scale `s`; the
+rectangle fits exactly when `s >= 1`. The current implementation removes RNG
+from its candidate enumeration and validates every positive witness, but it
+does not treat an unsuccessful finite search as a negative certificate.
+
 The paper reports a nearly balanced placement target distribution of 49.9%
-`True`. If random object selection does not reproduce that balance, select
-candidate objects using deterministic rejection sampling or stratification.
+`True`. The local generator enforces an exact 50/50 `True`/`False` split for
+every registered Boolean task. It creates a seeded answer schedule, then uses
+deterministic catalog rejection sampling to select a witnessed positive or a
+certified negative for the class assigned to each emitted layout. When no fixed
+catalog rectangle provides an area-based negative certificate, the largest
+catalog rectangle is scaled deterministically until its three-decimal
+dimensions have more area than the largest connected free-space component.
+Exact balance requires an even requested layout count.
 
 ### Shortest path
 

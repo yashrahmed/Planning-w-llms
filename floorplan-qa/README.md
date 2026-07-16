@@ -35,8 +35,11 @@ other than `main`.
 ## Generate training questions
 
 Generate all eight deterministic QA tasks for each requested layout. Layouts
-are drawn by a seeded uniform shuffle over the complete released corpus; the
-generator does not force room-source or answer-class balance:
+are drawn by a seeded uniform shuffle over the complete released corpus. The
+layout count must be even: every Boolean task is deterministically stratified
+to contain exactly 50% `True` and 50% `False` reference answers. Placement is
+currently the only Boolean task; layouts that cannot produce a witnessed
+positive or certified negative for their assigned class are skipped:
 
 ```shell
 ./scripts/generate_questions.sh 20 1
@@ -59,13 +62,21 @@ split is included in each layout filename:
 ./scripts/generate_questions.sh 20 7 val
 ```
 
+For a negative Placement target, the generator first tries the fixed catalog.
+If none of its rectangles has an area-based impossibility certificate, it
+deterministically scales the largest catalog rectangle until its area exceeds
+the largest connected free-space component. The displayed dimensions are the
+same three-decimal values used by the solver, so the negative remains
+independently checkable from the emitted question.
+
 Each record includes task parameters, a typed reference answer, fixed-template
 prompt messages, input-validation results, solver settings, convergence data,
-and version provenance. The `paper-v2` implementation uses continuous
-first-collision repositioning, configuration-space placement with exact
-witnesses or certified negatives, deterministic global Max Box search, and
-0.15 m-clearance grid A* for shortest paths. Visibility intentionally uses
-actual polygon intersections rather than paper-style bounding boxes.
+and version provenance. The `paper-v4-seed-independent-geometry`
+implementation uses continuous first-collision repositioning, seed-independent
+configuration-space placement with exact witnesses or area-certified
+negatives, deterministic numerical Max Box search, and 0.15 m-clearance grid
+A* for shortest paths. Visibility intentionally uses actual polygon
+intersections rather than paper-style bounding boxes.
 
 ## Evaluate generation quality
 
@@ -83,8 +94,8 @@ cp datasets/train-qa/questions.jsonl /tmp/questions-first.jsonl
 
 The hard gates are documented in
 [`question-gen.md`](question-gen.md#quality-metrics-and-validation).
-The evaluator also reports the unforced room-source and Placement-answer
-distributions as advisory measurements.
+The evaluator also reports the unforced room-source distribution and verifies
+that regenerated records retain their assigned Boolean-answer targets.
 
 ## V1: evaluate with the full raw context
 
@@ -434,6 +445,80 @@ A stronger follow-up dataset should deliberately include both `True` and
 that are and are not dimensionally dominated by the maximum-area witness. The
 completed ignored report is
 `datasets/evaluations/qwen3.5-4b-random-other-placement-seed-0-10.json`.
+
+#### Balanced Boolean Placement agent check
+
+The balanced generator follow-up used 20 layouts selected with generation seed
+7 and emitted 20 Placement questions: exactly 10 `True` and 10 `False`. The
+explicit-file tool agent used Ollama `qwen3.5:4b`, agent seed 0, temperature 0,
+thinking disabled, eight turns, and a 2,500-generated-token budget per
+question.
+
+The first agent run scored **19/20**. It correctly answered all 10 negative
+questions and 9 of 10 positive questions, with no formatting or runtime
+failures. The miss was not a model-routing error: for
+`placement-kitchen-253`, the model called `find_space_with_size(2.4, 1.2,
+kitchen-253-test.json)`, received `False`, and faithfully returned `False`,
+while the generator had recorded `True`.
+
+The mismatch came from the two callers seeding sampled placement-center search
+differently. The generator used its global generation seed, while
+`find_space_with_size` used a query-specific seed. Both called the same geometry
+function, but a narrow feasible region could therefore be sampled by one caller
+and missed by the other. The temporary shared-seed repair reproduced the
+generator's answer, but it coupled a real tool to hidden dataset provenance and
+was therefore unsuitable as the final design.
+
+After regenerating the same seeded 20-layout set, the corrected run scored
+**20/20**: 10/10 `True` and 10/10 `False`, with zero formatting failures and
+zero runtime errors. It completed in 195.597 seconds, generated 4,541 tokens
+over 45 model calls, and made 25 tool calls. Every question called
+`find_space_with_size`; five first called `inspect_room`. The raw before and
+after reports remain ignored at
+`datasets/evaluations/qwen3.5-4b-balanced-placement-seed-7-before-shared-seed.json`
+and
+`datasets/evaluations/qwen3.5-4b-balanced-placement-seed-7-after-shared-seed.json`.
+
+#### Seed-independent geometry follow-up
+
+The shared placement seed has now been removed. Geometry answers depend only
+on the layout polygons and the visible query dimensions. Both question
+generation and `find_space_with_size` enumerate the same deterministic
+configuration-space candidates: one representative per connected component,
+representatives from a polygon triangulation, and a fixed Halton
+low-discrepancy sequence. Every `True` answer includes a placement center and
+rotation that passes an independent full-rectangle containment check. The
+former `kitchen-253` query for a 2.4 by 1.2 meter rectangle now consistently
+returns a valid witness centered at `(3.1875, 2.48)` and rotated 90 degrees,
+without reading a seed, source group, split, or layout ID.
+
+A failed finite search is not accepted as proof of `False`. The tool returns
+`False` only when the query rectangle's area exceeds the area of every
+connected free-space component. Otherwise it reports that the result is
+inconclusive. The balanced generator follows the same rule: positives require
+a checked witness and negatives require the area certificate.
+
+Max Box no longer consumes a generation seed either. Its initial centers come
+from the same deterministic geometry candidates, and its population mutation
+and refinement schedule is fixed. On `kitchen-253`, generation seeds 0, 7, and
+99 all produced the identical 4.6513739646 square-meter witness. This removes
+the generator/tool seed-alignment problem, but the result remains a valid
+numerical lower bound rather than a proof of the global maximum. The exact
+target is the arbitrary-orientation contact-event algorithm described in
+[Maximum-Area Rectangles in a Simple Polygon](https://arxiv.org/abs/1910.08686).
+The exact target for fixed-aspect placement is the largest-similar-polygon
+algorithm described in
+[Largest similar copies of convex polygons amidst polygonal obstacles](https://arxiv.org/abs/2012.06978).
+
+A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
+exact 10/10 Placement balance, and passed schema, prompt, reproducibility,
+geometry-witness, placement-certificate, path, Max Box convergence, and
+byte-for-byte determinism checks at 100%. Complete-layout yield was 20/22
+(90.9%), below the 95% quality gate solely because two released bedroom layouts
+contain a degenerate `mirror` polygon; this is an input-data validation issue,
+not a geometry-seed failure. Directly replaying the generated visible arguments
+through the agent runtime matched all 20/20 Placement answers and all 20/20
+rounded Max Box answers.
 
 Both model backends accept a QA JSONL path, remove reference/assistant messages
 from each record, run one example at a time, print a per-example verdict, and

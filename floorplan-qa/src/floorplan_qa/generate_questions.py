@@ -20,6 +20,7 @@ from .geometry import (
     entity_centroid,
     entity_polygon,
     format_number,
+    geometry_polygons,
     intersecting_entities,
     is_ceiling_fixture,
     is_soft_covering,
@@ -42,7 +43,7 @@ DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "datasets" / "train-qa"
 OUTPUT_FILENAME = "questions.jsonl"
 GENERATION_REPORT_FILENAME = "generation-report.json"
 DATASET_SPLITS = ("train", "test", "val")
-SOLVER_VERSION = "paper-v2"
+SOLVER_VERSION = "paper-v4-seed-independent-geometry"
 TASKS = (
     "pair_distance",
     "free_space",
@@ -53,6 +54,7 @@ TASKS = (
     "shortest_path",
     "visibility",
 )
+BOOLEAN_TASKS = ("placement",)
 
 MOVABLE_LABELS = {
     "kitchen": ("stove", "fridge", "sink", "dishwasher", "table", "chair"),
@@ -129,9 +131,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--num-layouts",
-        type=positive_integer,
+        type=balanced_layout_count,
         required=True,
-        help="Number of layouts to select (each emits eight QA records).",
+        help=(
+            "Even number of layouts to select (each emits eight QA records); "
+            "an even count is required for exact Boolean answer balance."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -160,6 +165,26 @@ def positive_integer(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
+
+
+def balanced_layout_count(value: str) -> int:
+    parsed = positive_integer(value)
+    if parsed % 2:
+        raise argparse.ArgumentTypeError(
+            "must be even so every Boolean task has a 50/50 answer split"
+        )
+    return parsed
+
+
+def boolean_answer_targets(task: str, count: int, seed: int) -> list[bool]:
+    """Return a deterministic, exactly balanced answer schedule for one task."""
+    if task not in BOOLEAN_TASKS:
+        raise ValueError(f"task is not registered as Boolean: {task}")
+    if count < 0 or count % 2:
+        raise ValueError("Boolean answer balance requires a nonnegative even count")
+    targets = [False] * (count // 2) + [True] * (count // 2)
+    stable_rng(seed, "boolean-answer-balance", task).shuffle(targets)
+    return targets
 
 def natural_sort_key(path: Path) -> list[int | str]:
     return [
@@ -321,7 +346,11 @@ def repositioning_task(context: LayoutContext, rng: random.Random) -> TaskResult
         },
     )
 
-def placement_task(context: LayoutContext, rng: random.Random) -> TaskResult:
+def placement_task(
+    context: LayoutContext,
+    rng: random.Random,
+    expected_answer: bool | None = None,
+) -> TaskResult:
     catalog = PLACEMENT_CATALOG.get(
         context.source_group, PLACEMENT_CATALOG["hssd"]
     )
@@ -335,23 +364,58 @@ def placement_task(context: LayoutContext, rng: random.Random) -> TaskResult:
     certificate: dict[str, Any] | None = None
     selection_attempt = 0
     for candidate_index, (object_name, width, depth) in enumerate(candidates, start=1):
+        candidate_certificate = placement_false_certificate(free_space, width, depth)
+        if expected_answer is False:
+            if candidate_certificate is not None:
+                selected = (object_name, width, depth)
+                certificate = candidate_certificate
+                selection_attempt = candidate_index
+                break
+            continue
+
         candidate_witness = (
             None
             if free_space.is_empty
-            else placement_witness(free_space, width, depth, rng)
+            else placement_witness(
+                free_space,
+                width,
+                depth,
+            )
         )
-        candidate_certificate = placement_false_certificate(free_space, width, depth)
         candidate_fit = candidate_witness is not None
         certified = candidate_fit or candidate_certificate is not None
+        matches_target = expected_answer is None or candidate_fit is expected_answer
         if certified:
+            if not matches_target:
+                continue
             selected = (object_name, width, depth)
             fit = candidate_fit
             witness = candidate_witness
             certificate = candidate_certificate
             selection_attempt = candidate_index
             break
+    if selected is None and expected_answer is False:
+        object_name, width, depth = max(candidates, key=lambda item: item[1] * item[2])
+        maximum_component_area = max(
+            (float(part.area) for part in geometry_polygons(free_space)),
+            default=0.0,
+        )
+        minimum_negative_area = maximum_component_area + max(
+            0.01, 2.0 * GEOMETRY_TOLERANCE
+        )
+        scale = max(1.0, math.sqrt(minimum_negative_area / (width * depth)))
+        width = math.ceil(width * scale * 1000.0) / 1000.0
+        depth = math.ceil(depth * scale * 1000.0) / 1000.0
+        certificate = placement_false_certificate(free_space, width, depth)
+        if certificate is not None:
+            selected = (object_name, width, depth)
+            selection_attempt = len(candidates) + 1
     if selected is None:
-        raise ValueError("could not find a witnessed or certified placement case")
+        target_text = "either answer" if expected_answer is None else str(expected_answer)
+        raise ValueError(
+            "could not find a witnessed or certified placement case for "
+            f"target {target_text}"
+        )
     object_name, width, depth = selected
 
     return TaskResult(
@@ -362,6 +426,7 @@ def placement_task(context: LayoutContext, rng: random.Random) -> TaskResult:
             "witness": witness,
             "false_certificate": certificate,
             "uniform_catalog_selection_attempt": selection_attempt,
+            "catalog_dimensions_scaled": selection_attempt > len(candidates),
         },
         answer_value=fit,
         answer_text="True" if fit else "False",
@@ -372,10 +437,15 @@ def placement_task(context: LayoutContext, rng: random.Random) -> TaskResult:
         ),
         output_description="exactly True or False",
         solver_metadata={
-            "algorithm": "configuration_space_with_exact_witness",
+            "algorithm": "deterministic_configuration_space_with_exact_witness",
             "rotation_step_degrees": 3.75,
             "answer_certified": witness is not None or certificate is not None,
-            "parameter_selection": "uniform_catalog_order_with_certified_rejection",
+            "parameter_selection": (
+                "uniform_catalog_order_with_certified_rejection"
+                if expected_answer is None
+                else "seeded_catalog_order_with_balanced_answer_target"
+            ),
+            "answer_target": expected_answer,
         },
     )
 
@@ -474,7 +544,6 @@ TASK_GENERATORS = {
     "free_space": free_space_task,
     "view_angle": view_angle_task,
     "repositioning": repositioning_task,
-    "max_box": max_box_task,
     "placement": placement_task,
     "shortest_path": shortest_path_task,
     "visibility": visibility_task,
@@ -503,13 +572,30 @@ def generate_record(
     seed: int,
     grid_resolution: float = DEFAULT_GRID_RESOLUTION,
     split: str = "train",
+    expected_boolean_answer: bool | None = None,
 ) -> dict[str, Any]:
     rng = stable_rng(seed, context.source_group, context.layout_id, task)
-    result = (
-        shortest_path_task(context, rng, resolution=grid_resolution)
-        if task == "shortest_path"
-        else TASK_GENERATORS[task](context, rng)
-    )
+    if expected_boolean_answer is not None and task not in BOOLEAN_TASKS:
+        raise ValueError(f"cannot set a Boolean answer target for non-Boolean task: {task}")
+    if task == "shortest_path":
+        result = shortest_path_task(context, rng, resolution=grid_resolution)
+    elif task == "max_box":
+        result = max_box_task(context)
+    elif task == "placement":
+        result = placement_task(context, rng, expected_answer=expected_boolean_answer)
+    else:
+        result = TASK_GENERATORS[task](context, rng)
+    if task in BOOLEAN_TASKS:
+        if not isinstance(result.answer_value, bool):
+            raise TypeError(f"Boolean task returned a non-Boolean answer: {task}")
+        if (
+            expected_boolean_answer is not None
+            and result.answer_value is not expected_boolean_answer
+        ):
+            raise ValueError(
+                f"Boolean task {task} returned {result.answer_value} for target "
+                f"{expected_boolean_answer}"
+            )
     room_layout_file = layout_filename(context, split)
     question = build_question(result, room_layout_file)
     system_prompt = (
@@ -535,7 +621,9 @@ def generate_record(
             "prompt_version": "fixed-template-v5-concise-layout-file",
             "layout_selection": "sha256-uniform-all-layouts",
             "task_selection": "all-eight-per-layout",
+            "boolean_answer_policy": "seeded-exact-50-50",
             "solver": result.solver_metadata,
+            "boolean_answer_target": expected_boolean_answer,
             "validation": context.validation,
         },
         "messages": [
@@ -582,6 +670,10 @@ def main() -> None:
         raise ValueError("--grid-resolution must be positive")
 
     paths = layout_paths(source_dir, args.seed)
+    answer_targets = {
+        task: boolean_answer_targets(task, args.num_layouts, args.seed)
+        for task in BOOLEAN_TASKS
+    }
     records: list[dict[str, Any]] = []
     contexts: list[LayoutContext] = []
     failures: list[str] = []
@@ -599,6 +691,11 @@ def main() -> None:
                     args.seed,
                     grid_resolution=args.grid_resolution,
                     split=args.split,
+                    expected_boolean_answer=(
+                        answer_targets[task][emitted_layouts]
+                        if task in BOOLEAN_TASKS
+                        else None
+                    ),
                 )
                 for task in TASKS
             ]
@@ -620,6 +717,24 @@ def main() -> None:
     emitted_layout_files = write_layout_files(contexts, output_dir, args.split)
     write_records(records, output_path)
     counts = {task: sum(record["task"] == task for record in records) for task in TASKS}
+    boolean_answer_counts = {
+        task: {
+            "true": sum(
+                record["task"] == task and record["reference_answer"] is True
+                for record in records
+            ),
+            "false": sum(
+                record["task"] == task and record["reference_answer"] is False
+                for record in records
+            ),
+        }
+        for task in BOOLEAN_TASKS
+    }
+    for task, answer_counts in boolean_answer_counts.items():
+        if answer_counts["true"] != answer_counts["false"]:
+            raise RuntimeError(
+                f"Boolean answer balance failed for {task}: {answer_counts}"
+            )
     print(
         f"Generated {len(records)} QA examples from {emitted_layouts} layouts "
         f"at {output_path}"
@@ -628,6 +743,12 @@ def main() -> None:
     print("Task counts:")
     for task, count in counts.items():
         print(f"  {task}: {count}")
+    print("Boolean answer counts:")
+    for task, answer_counts in boolean_answer_counts.items():
+        print(
+            f"  {task}: True={answer_counts['true']}, "
+            f"False={answer_counts['false']}"
+        )
     source_counts: dict[str, int] = {}
     for record in records[:: len(TASKS)]:
         source = Path(record["source_layout"]).parent.name
@@ -646,6 +767,7 @@ def main() -> None:
         "skipped_layouts": len(failures),
         "complete_layout_yield": emitted_layouts / considered_layouts,
         "task_counts": counts,
+        "boolean_answer_counts": boolean_answer_counts,
         "layout_source_counts": source_counts,
         "layout_selection": "sha256-uniform-all-layouts",
         "layout_files": emitted_layout_files,

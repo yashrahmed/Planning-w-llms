@@ -15,7 +15,7 @@ from typing import Any
 
 from shapely.affinity import translate
 from shapely.geometry import LineString, Point, Polygon
-from shapely.ops import linemerge, polygonize, unary_union
+from shapely.ops import linemerge, polygonize, triangulate, unary_union
 from shapely.validation import make_valid
 
 GEOMETRY_TOLERANCE = 1e-7
@@ -305,19 +305,62 @@ def rectangle_from_extents(
     ]
     return Polygon(points)
 
-def sample_points_in_geometry(
-    geometry: Any, rng: random.Random, count: int
+def halton_value(index: int, base: int) -> float:
+    """Return one deterministic low-discrepancy coordinate in [0, 1)."""
+    result = 0.0
+    fraction = 1.0
+    while index:
+        fraction /= base
+        index, remainder = divmod(index, base)
+        result += remainder * fraction
+    return result
+
+
+def deterministic_points_in_geometry(
+    geometry: Any, count: int
 ) -> list[tuple[float, float]]:
-    points = [
-        (float(polygon.representative_point().x), float(polygon.representative_point().y))
-        for polygon in geometry_polygons(geometry)
-    ]
+    """Return stable interior candidates without an RNG or layout identity.
+
+    Representative points cover every connected polygon component first.
+    Triangulation representatives add deterministic coverage of non-convex
+    regions, and a Halton sequence fills any remaining budget.
+    """
+    if geometry is None or geometry.is_empty or count <= 0:
+        return []
+
+    points: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+
+    def add(point: Point) -> None:
+        coordinate = (float(point.x), float(point.y))
+        key = (round(coordinate[0], 12), round(coordinate[1], 12))
+        if key not in seen and geometry.covers(point):
+            seen.add(key)
+            points.append(coordinate)
+
+    polygons = sorted(geometry_polygons(geometry), key=lambda part: part.bounds)
+    for polygon in polygons:
+        add(polygon.representative_point())
+        add(polygon.centroid)
+    for polygon in polygons:
+        for triangle in triangulate(polygon):
+            clipped = triangle.intersection(polygon)
+            for part in geometry_polygons(clipped):
+                if part.area > GEOMETRY_TOLERANCE:
+                    add(part.representative_point())
+                    if len(points) >= count:
+                        return points[:count]
+
     min_x, min_y, max_x, max_y = geometry.bounds
+    index = 1
     attempts = 0
     while len(points) < count and attempts < count * 100:
-        point = (rng.uniform(min_x, max_x), rng.uniform(min_y, max_y))
-        if geometry.covers(Point(point)):
-            points.append(point)
+        candidate = Point(
+            min_x + halton_value(index, 2) * (max_x - min_x),
+            min_y + halton_value(index, 3) * (max_y - min_y),
+        )
+        add(candidate)
+        index += 1
         attempts += 1
     return points
 
@@ -383,13 +426,13 @@ def rectangle_from_parameters(parameters: list[float]) -> Polygon:
     return centered_rectangle((x, y), width, depth, angle)
 
 def optimize_maximum_rectangle(
-    free_space: Any, room: Polygon, rng: random.Random
+    free_space: Any, room: Polygon
 ) -> tuple[list[float], dict[str, Any]]:
-    """Deterministic global search with exact feasibility and local refinement."""
+    """Run a seed-independent numerical search with exact witness validation."""
     min_x, min_y, max_x, max_y = room.bounds
     cap = math.hypot(max_x - min_x, max_y - min_y)
     angles = edge_angles(free_space)
-    centers = sample_points_in_geometry(free_space, rng, 10)
+    centers = deterministic_points_in_geometry(free_space, 12)
     seeds: list[tuple[float, list[float]]] = []
     for center in centers:
         for angle in angles[:20]:
@@ -400,8 +443,9 @@ def optimize_maximum_rectangle(
                 )
     if not seeds:
         return [0.0, 0.0, 0.0, 0.0, 0.0], {
-            "algorithm": "deterministic_differential_evolution",
+            "algorithm": "deterministic_candidate_refinement",
             "converged": True,
+            "global_optimum_certified": False,
             "iterations": 0,
             "relative_improvement_window": 0.0,
         }
@@ -436,9 +480,8 @@ def optimize_maximum_rectangle(
     population = [parameters for _, parameters in seeds[:population_size]]
     while len(population) < population_size:
         center = centers[len(population) % len(centers)]
-        population.append(
-            [center[0], center[1], 0.02, 0.02, rng.uniform(0.0, math.pi)]
-        )
+        angle = angles[len(population) % len(angles)]
+        population.append([center[0], center[1], 0.02, 0.02, angle])
     scores = [fitness(candidate) for candidate in population]
     history = [max(scores)]
     converged = False
@@ -447,7 +490,9 @@ def optimize_maximum_rectangle(
     for generation in range(1, 61):
         for index, target in enumerate(population):
             choices = [item for item in range(population_size) if item != index]
-            first, second, third = rng.sample(choices, 3)
+            offset = (generation * 7 + index * 11) % len(choices)
+            ordered = choices[offset:] + choices[:offset]
+            first, second, third = ordered[:3]
             mutant = [
                 population[first][dimension]
                 + 0.72
@@ -458,11 +503,11 @@ def optimize_maximum_rectangle(
                 for dimension in range(5)
             ]
             mutant = normalize(mutant)
-            forced = rng.randrange(5)
+            retained_dimension = (index + generation) % 5
             trial = [
-                mutant[dimension]
-                if dimension == forced or rng.random() < 0.82
-                else target[dimension]
+                target[dimension]
+                if dimension == retained_dimension
+                else mutant[dimension]
                 for dimension in range(5)
             ]
             trial_score = fitness(trial)
@@ -498,10 +543,11 @@ def optimize_maximum_rectangle(
                         improved = True
 
     metadata = {
-        "algorithm": "deterministic_differential_evolution",
+        "algorithm": "deterministic_candidate_refinement",
         "population": population_size,
         "iterations": iterations,
         "converged": converged,
+        "global_optimum_certified": False,
         "relative_tolerance": MAX_BOX_RELATIVE_TOLERANCE,
         "relative_improvement_window": round(relative_improvement, 8),
         "angle_candidates": len(angles),
@@ -509,7 +555,7 @@ def optimize_maximum_rectangle(
     }
     return best, metadata
 
-def max_box_task(context: LayoutContext, rng: random.Random) -> TaskResult:
+def max_box_task(context: LayoutContext) -> TaskResult:
     blockers = [
         entity_polygon(entity)
         for entity in context.entities
@@ -525,15 +571,16 @@ def max_box_task(context: LayoutContext, rng: random.Random) -> TaskResult:
         answer = 0.0
         best = [0.0, 0.0, 0.0, 0.0, 0.0]
         metadata = {
-            "algorithm": "deterministic_differential_evolution",
+            "algorithm": "deterministic_candidate_refinement",
             "converged": True,
+            "global_optimum_certified": True,
             "iterations": 0,
             "relative_tolerance": MAX_BOX_RELATIVE_TOLERANCE,
             "relative_improvement_window": 0.0,
             "best_valid_lower_bound_m2": 0.0,
         }
     else:
-        best, metadata = optimize_maximum_rectangle(free_space, context.room, rng)
+        best, metadata = optimize_maximum_rectangle(free_space, context.room)
         answer = float(best[2] * best[3])
 
     return TaskResult(
@@ -575,6 +622,7 @@ def placement_free_space(context: LayoutContext) -> Any:
         else make_valid(context.room.difference(blocker_union))
     )
 
+
 def configuration_space_region(
     free_space: Any, width: float, depth: float, angle: float
 ) -> Any:
@@ -600,7 +648,6 @@ def placement_witness(
     free_space: Any,
     width: float,
     depth: float,
-    rng: random.Random,
 ) -> dict[str, Any] | None:
     angles = set(edge_angles(free_space))
     angles.update(round(index * math.pi / 48, 10) for index in range(48))
@@ -608,7 +655,7 @@ def placement_witness(
         region = configuration_space_region(free_space, width, depth, angle)
         if region.is_empty:
             continue
-        for center in sample_points_in_geometry(region, rng, 16):
+        for center in deterministic_points_in_geometry(region, 32):
             rectangle = centered_rectangle(center, width, depth, angle)
             if free_space.buffer(GEOMETRY_TOLERANCE).covers(rectangle):
                 return {

@@ -15,6 +15,7 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 
 from .generate_questions import (
+    BOOLEAN_TASKS,
     DEFAULT_LAYOUT_DIR,
     GENERATION_REPORT_FILENAME,
     TASKS,
@@ -46,6 +47,7 @@ RATE_THRESHOLDS = {
     "path_validity_rate": 1.0,
     "max_box_convergence_rate": 1.0,
     "deterministic_match_rate": 1.0,
+    "boolean_answer_balance_rate": 1.0,
 }
 
 REQUIRED_FIELDS = {
@@ -328,6 +330,11 @@ def assess(
             seed,
             grid_resolution=grid_resolution,
             split=str(record["split"]),
+            expected_boolean_answer=(
+                provenance.get("boolean_answer_target")
+                if record["task"] in BOOLEAN_TASKS
+                else None
+            ),
         )
         deterministic_fields = (
             "parameters",
@@ -383,6 +390,29 @@ def assess(
         sum(bool(record["reference_answer"]) for record in placement_records),
         len(placement_records),
     )
+    targeted_boolean_groups = {
+        task: [
+            record
+            for record in records
+            if record["task"] == task
+            and isinstance(
+                record.get("provenance", {}).get("boolean_answer_target"), bool
+            )
+        ]
+        for task in BOOLEAN_TASKS
+    }
+    targeted_boolean_groups = {
+        task: group for task, group in targeted_boolean_groups.items() if group
+    }
+    if targeted_boolean_groups:
+        metrics["boolean_answer_balance_rate"] = rate(
+            sum(
+                sum(record["reference_answer"] is True for record in group)
+                == sum(record["reference_answer"] is False for record in group)
+                for group in targeted_boolean_groups.values()
+            ),
+            len(targeted_boolean_groups),
+        )
     return metrics, failures
 
 
@@ -436,10 +466,25 @@ def main() -> None:
         "layouts": len({(record["source_layout"], record["layout_id"]) for record in records}),
         "metrics": metrics,
         "thresholds": RATE_THRESHOLDS,
-        "advisory": {"placement_true_rate_preferred_range": [0.35, 0.65]},
+        "advisory": {"placement_true_rate": metrics.get("placement_true_rate")},
         "distributions": {
             "tasks": dict(sorted(Counter(record["task"] for record in records).items())),
             "layout_sources": source_rates,
+            "boolean_answers": {
+                task: {
+                    "true": sum(
+                        record["task"] == task
+                        and record["reference_answer"] is True
+                        for record in records
+                    ),
+                    "false": sum(
+                        record["task"] == task
+                        and record["reference_answer"] is False
+                        for record in records
+                    ),
+                }
+                for task in BOOLEAN_TASKS
+            },
         },
         "failures": failures,
     }

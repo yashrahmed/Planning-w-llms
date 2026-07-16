@@ -266,9 +266,20 @@ class FloorplanToolTests(unittest.TestCase):
 
         self.assertEqual(
             output,
-            "No space was found for a rectangle 9.000 meters wide and 8.000 "
-            "meters long. The answer is False.",
+            "A rectangle 9.000 meters wide and 8.000 meters long cannot fit "
+            "because its area exceeds the largest connected free-space area. "
+            "The answer is False.",
         )
+
+    def test_find_space_with_size_does_not_guess_false_without_a_certificate(self) -> None:
+        with patch(
+            "floorplan_qa.floorplan_tools.placement_witness", return_value=None
+        ):
+            output = self.runtime.find_space_with_size(1.0, 1.0, self.file_id)
+
+        self.assertIn("could not certify that placement is impossible", output)
+        self.assertIn("The result is inconclusive.", output)
+        self.assertNotIn("The answer is False.", output)
 
     def test_find_space_with_size_rejects_invalid_dimensions(self) -> None:
         with self.assertRaisesRegex(ValueError, "width must be a positive"):

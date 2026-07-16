@@ -6,7 +6,7 @@ import json
 import math
 import re
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +20,10 @@ from .geometry import (
     load_layout,
     max_box_task,
     maximum_slide_distance,
+    placement_false_certificate,
     placement_free_space,
     placement_witness,
     shortest_grid_path,
-    stable_rng,
     union_polygons,
 )
 
@@ -195,12 +195,12 @@ LARGEST_EMPTY_AREA_TOOL = {
     "function": {
         "name": "largest_empty_area",
         "description": (
-            "Returns the width, length, and area of one maximum-area rectangle "
-            "that fits fully inside the room at any rotation without overlapping "
-            "blocking objects or openings. Its side lengths are not global limits "
-            "for rectangles with other aspect ratios. Rugs and ceiling-only "
-            "fixtures are treated as nonblocking. Dimensions are in meters and "
-            "area is in square meters."
+            "Returns the width, length, and area of the best valid rectangle "
+            "found by a deterministic any-rotation search. The returned witness "
+            "fits fully inside the room without overlapping blocking objects or "
+            "openings. Its side lengths are not global limits for rectangles with "
+            "other aspect ratios. Rugs and ceiling-only fixtures are treated as "
+            "nonblocking. Dimensions are in meters and area is in square meters."
         ),
         "parameters": {
             "type": "object",
@@ -226,9 +226,10 @@ FIND_SPACE_WITH_SIZE_TOOL = {
         "description": (
             "Determines whether a rectangle with the specified width and length "
             "can fit fully inside the room at any rotation without overlapping "
-            "blocking objects or openings. Returns True or False in natural "
-            "language and includes a valid center and rotation when space is "
-            "found. Dimensions are in meters."
+            "blocking objects or openings. Returns True with a valid center and "
+            "rotation when a placement is found, False only with an impossibility "
+            "certificate, and otherwise reports that the result is inconclusive. "
+            "Dimensions are in meters."
         ),
         "parameters": {
             "type": "object",
@@ -657,15 +658,7 @@ class FloorplanToolRuntime:
     def largest_empty_area(self, file_id: str) -> str:
         layout_path = self.resolve_layout_file(file_id)
         context = load_layout(layout_path)
-        filename_parts = Path(file_id).stem.rsplit("-", 2)
-        source_group = (
-            filename_parts[0] if len(filename_parts) == 3 else context.source_group
-        )
-        context = replace(context, source_group=source_group)
-        result = max_box_task(
-            context,
-            stable_rng(0, context.source_group, context.layout_id, "max_box"),
-        )
+        result = max_box_task(context)
         witness = result.parameters["witness"]
         width = float(witness["width"])
         length = float(witness["depth"])
@@ -689,11 +682,6 @@ class FloorplanToolRuntime:
             normalized[name] = numeric
 
         context = load_layout(self.resolve_layout_file(file_id))
-        filename_parts = Path(file_id).stem.rsplit("-", 2)
-        source_group = (
-            filename_parts[0] if len(filename_parts) == 3 else context.source_group
-        )
-        context = replace(context, source_group=source_group)
         free_space = placement_free_space(context)
         witness = (
             None
@@ -702,21 +690,27 @@ class FloorplanToolRuntime:
                 free_space,
                 normalized["width"],
                 normalized["length"],
-                stable_rng(
-                    0,
-                    context.source_group,
-                    context.layout_id,
-                    "find_space_with_size",
-                    normalized["width"],
-                    normalized["length"],
-                ),
             )
         )
         if witness is None:
+            certificate = placement_false_certificate(
+                free_space,
+                normalized["width"],
+                normalized["length"],
+            )
+            if certificate is None:
+                return (
+                    f"The deterministic search found no witnessed placement for "
+                    f"a rectangle {normalized['width']:.3f} meters wide and "
+                    f"{normalized['length']:.3f} meters long, but it also could "
+                    "not certify that placement is impossible. The result is "
+                    "inconclusive."
+                )
             return (
-                f"No space was found for a rectangle {normalized['width']:.3f} "
-                f"meters wide and {normalized['length']:.3f} meters long. "
-                "The answer is False."
+                f"A rectangle {normalized['width']:.3f} meters wide and "
+                f"{normalized['length']:.3f} meters long cannot fit because its "
+                f"area exceeds the largest connected free-space area. The answer "
+                "is False."
             )
 
         center_x, center_y = witness["center"]
