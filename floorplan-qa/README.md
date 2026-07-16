@@ -646,6 +646,88 @@ the subtraction correctly.
 The complete ignored report is
 `datasets/evaluations/qwen3.5-4b-cgal-seed-0-50.json`.
 
+#### CGAL 300-question tool-agent evaluation (2026-07-16)
+
+A fresh 38-layout, seed-0 pool produced 304 records. The first 300 evaluated
+records were deterministically arranged to retain all 38 Placement questions,
+including the generator's exact 19 `True` / 19 `False` split. The selected set
+contained 37 Pair Distance, Free Space, View Angle, and Repositioning questions
+and 38 Max Box, Placement, Shortest Path, and Visibility questions. All records
+used explicit layout-file references; scorer-only task labels, parameters,
+reference answers, and source provenance remained outside both model and tool
+runtime input.
+
+Ollama `qwen3.5:4b` ran with the current eleven-tool set, agent seed 0,
+temperature 0, thinking disabled, a shared 2,500-generated-token budget per
+question, at most eight turns, and five transient-connection retries. The run
+completed under `caffeinate`, and the evaluator and wrapper both exited
+normally.
+
+| Task | Correct | Total | Formatting failures |
+|---|---:|---:|---:|
+| Pair Distance | 37 | 37 | 0 |
+| Free Space | 28 | 37 | 2 |
+| View Angle | 37 | 37 | 0 |
+| Repositioning | 37 | 37 | 0 |
+| Max Box | 38 | 38 | 0 |
+| Placement | 38 | 38 | 0 |
+| Shortest Path | 37 | 38 | 1 |
+| Visibility | 37 | 38 | 1 |
+| **Overall** | **289** | **300** | **4** |
+
+The final score was **289/300 (96.3%)**. The run took 4,535.204 seconds
+(75 minutes 35.2 seconds), generated 118,326 tokens over 856 model calls, and
+made 557 tool calls. There were no runtime or tool errors. Placement,
+Repositioning, Max Box, Pair Distance, and View Angle all scored 100%, so the
+CGAL-backed configuration-space changes introduced no observed agent-level
+regression on this set.
+
+Nine of the eleven failures were Free Space questions:
+
+- Seven semantic errors (`free-space-bedroom-135`,
+  `free-space-bedroom-245`, `free-space-kitchen-512`,
+  `free-space-living_room-352`, `free-space-bedroom-521`,
+  `free-space-hssd-41`, and `free-space-living_room-229`) followed the same
+  trace: `inspect_room` returned total room area, `occupied_floor_area`
+  returned occupied area, and the model immediately mislabeled the occupied
+  value as non-occupied instead of subtracting. The first two exactly
+  reproduced the two failures in the preceding 50-question run.
+- `free-space-hssd-101` called `largest_empty_area` and
+  `occupied_floor_area` but not `inspect_room`. It correctly explained that
+  largest empty rectangle area is not total non-occupied area, then spent all
+  2,500 tokens claiming total room area was unavailable rather than obtaining
+  it from `inspect_room`.
+- `free-space-kitchen-413` obtained the correct 13.900 result from the
+  calculator six times, exhausted all eight turns, and never emitted a final
+  answer.
+
+The other two failures also had correct direct tool results. For
+`visibility-kitchen-141`, `ray_trace` returned `[chair_1]`; the model then made
+seven unrelated calculator calls and ended with an untagged answer. For
+`shortest-path-kitchen-551`, `shortest_path` returned the exact reference
+waypoints; the model made six redundant calculator calls and repeated the
+correct path without the required `*Final answer*:` marker. Both were scored as
+formatting failures rather than geometry failures.
+
+The failures suggest three targeted changes:
+
+1. Preserve the intended arithmetic test, but make the agent prompt explicit
+   that non-occupied floor area is total room area minus occupied floor area
+   and that the calculator should perform that subtraction. A dedicated
+   available-area tool would hide the arithmetic capability being evaluated.
+2. Add a generic finalization guard: after a tool directly supplies the
+   requested result, or after a calculator returns the required arithmetic
+   result, the next model turn should answer instead of calling unrelated or
+   duplicate tools.
+3. Reserve a final-answer-only turn in the evaluator and detect repeated
+   identical tool calls. When the normal turn budget is about to expire, the
+   evaluator should ask for the required final-answer format with tools
+   disabled. This would address all four formatting failures without changing
+   reference answers or exposing scorer-only data.
+
+The complete report remains ignored at
+`datasets/evaluations/qwen3.5-4b-cgal-seed-0-300.json`.
+
 A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
 exact 10/10 Placement balance, and passed schema, prompt, reproducibility,
 geometry-witness, placement-certificate, path, Max Box convergence, and
