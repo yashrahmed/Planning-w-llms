@@ -127,7 +127,7 @@ metadata and functioned as an oracle rather than an agent evaluation.
 
 ## Explicit-file tool evaluator
 
-The model-facing tool set contains ten focused operations:
+The model-facing tool set contains eleven focused operations:
 
 | Tool | Description |
 |---|---|
@@ -136,11 +136,25 @@ The model-facing tool set contains ten focused operations:
 | `view_angle(object_id_1, object_id_2, file_id)` | Returns the unsigned angle from north (the positive y-axis) to the vector between two entity centroids, in the range 0 through 180 degrees and rounded to three decimals. |
 | `inspect_entity(object_id, file_id)` | Returns one entity's kind, polygon centroid, axis-aligned minimum and maximum coordinates, polygon area, and vertex count. Object, door, and window IDs are accepted. |
 | `ray_trace(object_id_1, object_id_2, file_id)` | Traces the finite centroid-to-centroid segment and returns every other intersected entity ID in traversal order. Object, door, and window IDs are accepted. |
-| `largest_empty_area(file_id)` | Returns the width, length, and area of the largest rectangle that fits inside the room at any rotation under the benchmark's blocking rules. |
+| `largest_empty_area(file_id)` | Returns the width, length, and area of one maximum-area rectangle that fits inside the room at any rotation. Its side lengths are not global limits for other aspect ratios. |
+| `find_space_with_size(width, length, file_id)` | Returns whether the requested rectangle fits anywhere in the room at any evaluated rotation and includes a valid center and rotation when it does. |
 | `occupied_floor_area(file_id)` | Returns the unioned area of occupied object polygons. Rugs count as occupied, while openings and ceiling-only fixtures do not. |
 | `calculator(operand_1, operand_2, operator)` | Applies `add`, `sub`, `mul`, or `div` and returns a result rounded to three decimals. Division by zero returns `Error`. |
 | `shortest_path(object_id_1, object_id_2, file_id)` | Returns an ordered shortest centroid-to-centroid waypoint path while maintaining the benchmark's fixed 0.15 m clearance from other blocking entities. |
 | `test_movement(object_id, direction, file_id)` | Returns the maximum distance an object can translate up, down, left, or right before first contact with a blocking object or the room boundary. |
+
+The evaluator prepends this system prompt:
+
+```text
+You are a FloorplanQA agent. Solve each question using the available floorplan
+tools whenever they provide relevant geometric evidence. The room layout is not
+embedded in the prompt: pass the exact file identifier written in the question
+to any tool that requires it. Choose tool names and arguments only from the
+user-visible question and tool schemas. Do not invent tool results. When a tool
+directly returns the quantity requested by the question, use that result as the
+final answer without independently recomputing it, unless the tool reports an
+error. End with the exact final-answer format requested by the user.
+```
 
 For example, its output has this form:
 
@@ -277,6 +291,149 @@ questions, runtime fell by 77.7%, generated tokens by 70.1%, model calls by
 75.0%, and tool calls by 87.5%. The completed ignored report is
 `datasets/evaluations/qwen3.5-4b-v3-failures-current-tools.json`; the ignored
 replay input and copied layouts are under `datasets/train-qa/v3-failures/`.
+
+### Three-hundred-question tool evaluation (2026-07-15)
+
+All 300 generated examples were evaluated in file order with the explicit-file
+tool runtime and Ollama `qwen3.5:4b`. The run used seed 0, temperature 0,
+thinking disabled, at most eight agent turns, five Ollama retries, and a total
+2,500-generated-token budget per question. The model saw the question's layout
+filename, tool schemas, and tool results it requested; task labels, parameters,
+reference answers, and source-layout provenance remained scorer-only.
+
+| Task | Correct | Total | Formatting failures |
+|---|---:|---:|---:|
+| Pair Distance | 38 | 38 | 0 |
+| Free Space | 38 | 38 | 0 |
+| View Angle | 37 | 38 | 1 |
+| Repositioning | 38 | 38 | 0 |
+| Max Box | 37 | 37 | 0 |
+| Placement | 29 | 37 | 3 |
+| Shortest Path | 37 | 37 | 0 |
+| Visibility | 37 | 37 | 0 |
+| **Overall** | **291** | **300** | **4** |
+
+The final score was **291/300 (97.0%)**. The run completed in 5,281.518
+seconds (88 minutes 1.5 seconds), generated 137,035 tokens over 872 model
+calls, and made 569 tool calls. There were no runtime or tool errors. The full
+checkpoint is
+`datasets/evaluations/qwen3.5-4b-explicit-file-tools-seed-0-300.json` and
+remains ignored by Git.
+
+#### Failure analysis
+
+| Failure class | Count | Question IDs | What happened |
+|---|---:|---|---|
+| Placement false negative | 5 | `placement-bedroom-123`, `placement-bedroom-286`, `placement-bedroom-245`, `placement-bedroom-85`, `placement-bedroom-138` | Each reference answer was `True`, but the model compared the candidate's sides with the single rectangle returned by `largest_empty_area` and answered `False`. That rectangle maximizes area; its side lengths are not independent global bounds on every other feasible aspect ratio. A longer, narrower candidate can fit elsewhere even when it does not fit inside the maximum-area witness. |
+| Placement without a final answer | 3 | `placement-bedroom-8`, `placement-bedroom-475`, `placement-living_room-229` | The model repeatedly reconsidered how to interpret the maximum-area witness and consumed all 2,500 generated tokens. In the living-room case, the returned 2.840 by 1.500 meter witness directly dominated the requested 2.500 by 1.000 meter candidate, but the model still failed to finalize. |
+| View Angle without a final answer | 1 | `view-angle-bedroom-189` | `view_angle` directly returned the correct 19.148-degree answer on the second tool call. The model then inspected both entities and made four redundant calculator calls before exhausting all eight turns without returning an answer. |
+
+The Placement failures are a capability mismatch, not an arithmetic or
+scoring defect. `largest_empty_area` answers Max Box by returning one
+maximum-area feasible rectangle. It is a sufficient Placement witness when a
+candidate fits inside that returned rectangle, but it cannot prove that a
+different aspect ratio does not fit. The model treated it as a complete
+feasibility oracle in all five false negatives and became indecisive around the
+same ambiguity in all three Placement formatting failures.
+
+Recommended changes, in priority order:
+
+1. Add a candidate-aware `find_space_with_size(width, length, file_id)` geometry tool
+   that tests the requested rectangle over the benchmark's allowed positions
+   and rotations and returns `True` or `False`, optionally with a witness pose.
+   This directly represents the Placement task and removes the invalid need to
+   infer feasibility from a maximum-area rectangle.
+2. Clarify that `largest_empty_area` returns one rectangle selected by maximum
+   area and that its individual side lengths are not global clearance limits.
+   This preserves its Max Box role while reducing misuse on other aspect
+   ratios.
+3. Add a generic agent instruction to finalize from a tool result when it
+   directly supplies the requested quantity, unless the tool reports an error.
+   This targets the View Angle failure and avoids redundant entity inspection
+   and arithmetic without exposing task labels or reference data.
+4. Preserve a small final-response reserve or force a final-answer turn when
+   the generated-token or turn budget is nearly exhausted. This is a fallback
+   for formatting robustness; it does not fix the missing Placement
+   capability by itself.
+
+#### Deterministic replay after the targeted fixes
+
+The exact nine failures were replayed before changing the toolset. A repeatable
+`--question-id` evaluator option selected those records directly from the same
+300-question JSONL while retaining file order. This selector does not alter the
+prompt, tools, model input, or scoring. With the original prompt and ten tools,
+the replay reproduced every original failure: each response, parsed answer,
+generated-token count, model-call count, stop reason, and ordered tool-name
+sequence matched its result in the full run. Runtime differed only in wall-clock
+duration.
+
+The implementation then added `find_space_with_size`, which applies the same
+configuration-space placement solver used by question generation to the width,
+length, and visible layout filename supplied by the model. A successful result
+includes a valid center and rotation; every result states `True` or `False` in
+natural language. The placement solver and its shared free-space helpers now
+live in `floorplan_qa.geometry`, so generation and tool execution use the same
+geometry implementation. The generic agent prompt also now says to finalize
+from a tool result that directly supplies the requested quantity instead of
+independently recomputing it, unless the tool reports an error.
+
+The same nine records were then replayed with identical model and evaluation
+settings: Ollama `qwen3.5:4b`, seed 0, temperature 0, thinking disabled, eight
+turns, five retries, and 2,500 generated tokens per question.
+
+| Metric | Before | After |
+|---|---:|---:|
+| Correct | 0/9 (0%) | **9/9 (100%)** |
+| Placement | 0/8 | **8/8** |
+| View Angle | 0/1 | **1/1** |
+| Formatting failures | 4 | 0 |
+| Runtime | 340.867 s | 95.501 s |
+| Generated tokens | 13,137 | 2,481 |
+| Model calls | 32 | 21 |
+| Tool calls | 24 | 12 |
+
+All eight Placement questions called `find_space_with_size` and returned
+`True`; six used it as their only tool, while two first called `inspect_room`.
+The View Angle question called `inspect_room` and `view_angle`, accepted the
+direct 19.148-degree result, and finalized without entity inspection or
+calculator calls. Relative to the deterministic baseline, runtime fell by
+72.0%, generated tokens by 81.1%, model calls by 34.4%, and tool calls by 50.0%.
+The completed before and after reports are
+`datasets/evaluations/qwen3.5-4b-nine-failures-before-find-space.json` and
+`datasets/evaluations/qwen3.5-4b-nine-failures-after-find-space.json`; both
+remain ignored by Git.
+
+#### Ten additional random Placement questions
+
+Ten other Placement records were sampled without replacement from the remaining
+29 Placement questions using Python's seeded `random.Random(0)`. The eight
+Placement failures used in the targeted replay were excluded. Evaluation kept
+the same model, seed, temperature, thinking setting, turn limit, retry count,
+and 2,500-token budget.
+
+The model answered **10/10 correctly** in 102.720 seconds, generated 2,525
+tokens over 23 model calls, and made 13 tool calls. Every question called
+`find_space_with_size`; seven used it as their only tool and three called
+`inspect_room` first. No question called `largest_empty_area`, and there were
+no formatting failures, runtime errors, entity-inspection calls, or calculator
+calls.
+
+This result has an important limitation. All 37 Placement records in the
+current 300-question dataset have reference answer `True`; the generator
+produced no negative Placement examples. Moreover, the rounded dimensions of
+the maximum-area witness were sufficient to contain the requested rectangle in
+all ten questions in this random sample. Consequently, this 10/10 score proves
+that the model consistently routes Placement questions to the new
+candidate-aware tool, but it does not independently prove that the new geometry
+operation was necessary for these ten answers. The earlier eight Placement
+failures remain the relevant aspect-ratio counterexamples where inference from
+the maximum-area witness failed.
+
+A stronger follow-up dataset should deliberately include both `True` and
+`False` Placement questions and should stratify positive cases between those
+that are and are not dimensionally dominated by the maximum-area witness. The
+completed ignored report is
+`datasets/evaluations/qwen3.5-4b-random-other-placement-seed-0-10.json`.
 
 Both model backends accept a QA JSONL path, remove reference/assistant messages
 from each record, run one example at a time, print a per-example verdict, and

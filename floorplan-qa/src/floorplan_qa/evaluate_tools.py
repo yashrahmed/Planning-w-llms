@@ -29,7 +29,10 @@ SYSTEM_PROMPT = (
     "layout is not embedded in the prompt: pass the exact file identifier written "
     "in the question to any tool that requires it. Choose tool names and arguments "
     "only from the user-visible question and tool schemas. Do not invent tool "
-    "results. End with the exact final-answer format requested by the user."
+    "results. When a tool directly returns the quantity requested by the question, "
+    "use that result as the final answer without independently recomputing it, "
+    "unless the tool reports an error. End with the exact final-answer format "
+    "requested by the user."
 )
 
 AGENT_DATA_BOUNDARY = {
@@ -66,6 +69,15 @@ def parse_args() -> argparse.Namespace:
         "--limit",
         type=int,
         help="Evaluate only the first N examples in input-file order.",
+    )
+    parser.add_argument(
+        "--question-id",
+        action="append",
+        default=[],
+        help=(
+            "Evaluate only this question ID; repeat for multiple IDs. Selected "
+            "questions retain input-file order."
+        ),
     )
     parser.add_argument(
         "--ollama-retries",
@@ -326,7 +338,14 @@ def build_report(
             "selection": (
                 "all_input_examples_in_file_order"
                 if len(examples) == input_count
-                else "first_n_in_file_order"
+                else (
+                    "first_n_in_file_order"
+                    if all(
+                        example.line_number == index
+                        for index, example in enumerate(examples, start=1)
+                    )
+                    else "selected_question_ids_in_file_order"
+                )
             ),
             "max_generated_tokens_per_question_across_agent_turns": max_tokens,
             "max_agent_turns": max_turns,
@@ -380,6 +399,10 @@ def main() -> None:
         or (args.limit is not None and args.limit < 1)
     ):
         raise ValueError("token and turn limits must be positive; retries cannot be negative")
+    if args.limit is not None and args.question_id:
+        raise ValueError("--limit and --question-id cannot be used together")
+    if len(args.question_id) != len(set(args.question_id)):
+        raise ValueError("--question-id values must be unique")
 
     input_path = args.jsonl_path.expanduser().resolve()
     if not input_path.is_file():
@@ -402,11 +425,21 @@ def main() -> None:
         raise ValueError(
             f"--limit {args.limit} exceeds the {len(input_examples)} input examples"
         )
-    examples = (
-        input_examples[: args.limit]
-        if args.limit is not None
-        else input_examples
-    )
+    if args.question_id:
+        selected_ids = set(args.question_id)
+        available_ids = {example.example_id for example in input_examples}
+        missing_ids = selected_ids - available_ids
+        if missing_ids:
+            raise ValueError(
+                "unknown --question-id value(s): " + ", ".join(sorted(missing_ids))
+            )
+        examples = [
+            example for example in input_examples if example.example_id in selected_ids
+        ]
+    elif args.limit is not None:
+        examples = input_examples[: args.limit]
+    else:
+        examples = input_examples
     runtime = FloorplanToolRuntime(layout_dir)
     started_at = utc_now()
     results: list[dict[str, Any]] = []

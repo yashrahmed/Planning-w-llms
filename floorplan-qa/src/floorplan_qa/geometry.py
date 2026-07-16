@@ -562,6 +562,75 @@ def centered_rectangle(
         center, [width / 2.0, width / 2.0, depth / 2.0, depth / 2.0], angle
     )
 
+def placement_free_space(context: LayoutContext) -> Any:
+    blockers = [
+        entity_polygon(entity)
+        for entity in context.entities
+        if not is_soft_covering(entity) and not is_ceiling_fixture(entity)
+    ]
+    blocker_union = union_polygons(blockers)
+    return (
+        context.room
+        if blocker_union is None
+        else make_valid(context.room.difference(blocker_union))
+    )
+
+def configuration_space_region(
+    free_space: Any, width: float, depth: float, angle: float
+) -> Any:
+    """Return the corner-constraint center region for a rotated rectangle."""
+    cosine, sine = math.cos(angle), math.sin(angle)
+    offsets = []
+    for x, y in (
+        (-width / 2.0, -depth / 2.0),
+        (width / 2.0, -depth / 2.0),
+        (width / 2.0, depth / 2.0),
+        (-width / 2.0, depth / 2.0),
+    ):
+        offsets.append((x * cosine - y * sine, x * sine + y * cosine))
+    region = None
+    for offset_x, offset_y in offsets:
+        translated = translate(free_space, xoff=-offset_x, yoff=-offset_y)
+        region = translated if region is None else region.intersection(translated)
+        if region.is_empty:
+            break
+    return make_valid(region) if region is not None else Polygon()
+
+def placement_witness(
+    free_space: Any,
+    width: float,
+    depth: float,
+    rng: random.Random,
+) -> dict[str, Any] | None:
+    angles = set(edge_angles(free_space))
+    angles.update(round(index * math.pi / 48, 10) for index in range(48))
+    for angle in sorted(angles):
+        region = configuration_space_region(free_space, width, depth, angle)
+        if region.is_empty:
+            continue
+        for center in sample_points_in_geometry(region, rng, 16):
+            rectangle = centered_rectangle(center, width, depth, angle)
+            if free_space.buffer(GEOMETRY_TOLERANCE).covers(rectangle):
+                return {
+                    "center": [round(center[0], 8), round(center[1], 8)],
+                    "rotation_degrees": round(math.degrees(angle), 8),
+                }
+    return None
+
+def placement_false_certificate(
+    free_space: Any, width: float, depth: float
+) -> dict[str, Any] | None:
+    component_areas = [float(part.area) for part in geometry_polygons(free_space)]
+    maximum_component_area = max(component_areas, default=0.0)
+    query_area = width * depth
+    if maximum_component_area + GEOMETRY_TOLERANCE < query_area:
+        return {
+            "type": "free_component_area_upper_bound",
+            "maximum_component_area_m2": maximum_component_area,
+            "query_rectangle_area_m2": query_area,
+        }
+    return None
+
 def navigation_geometry(
     context: LayoutContext,
     start_entity: dict[str, Any],

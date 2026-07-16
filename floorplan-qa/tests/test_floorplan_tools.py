@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from floorplan_qa.floorplan_tools import (
     CALCULATOR_TOOL,
+    FIND_SPACE_WITH_SIZE_TOOL,
     INSPECT_ENTITY_TOOL,
     INSPECT_ROOM_TOOL,
     LARGEST_EMPTY_AREA_TOOL,
@@ -240,6 +241,39 @@ class FloorplanToolTests(unittest.TestCase):
             "long, with an area of 6.920 square meters.",
         )
 
+    def test_find_space_with_size_returns_true_with_a_witness(self) -> None:
+        with patch(
+            "floorplan_qa.floorplan_tools.placement_witness",
+            return_value={"center": [2.25, 3.5], "rotation_degrees": 90.0},
+        ):
+            output = self.runtime.execute(
+                "find_space_with_size",
+                {"width": 3.0, "length": 0.8, "file_id": self.file_id},
+            )
+
+        self.assertEqual(
+            output,
+            "A rectangle 3.000 meters wide and 0.800 meters long fits in the "
+            "room. One valid placement is centered at x=2.250, y=3.500 meters "
+            "and rotated 90.000 degrees. The answer is True.",
+        )
+
+    def test_find_space_with_size_returns_false_without_a_witness(self) -> None:
+        with patch(
+            "floorplan_qa.floorplan_tools.placement_witness", return_value=None
+        ):
+            output = self.runtime.find_space_with_size(9.0, 8.0, self.file_id)
+
+        self.assertEqual(
+            output,
+            "No space was found for a rectangle 9.000 meters wide and 8.000 "
+            "meters long. The answer is False.",
+        )
+
+    def test_find_space_with_size_rejects_invalid_dimensions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "width must be a positive"):
+            self.runtime.find_space_with_size(0.0, 1.0, self.file_id)
+
     def test_occupied_floor_area_unions_objects_and_applies_task_filters(self) -> None:
         file_id = "area-room-9-train.json"
         layout = {
@@ -387,6 +421,19 @@ class FloorplanToolTests(unittest.TestCase):
         self.assertEqual(
             set(function["parameters"]["properties"]),
             {"file_id"},
+        )
+        self.assertFalse(function["parameters"]["additionalProperties"])
+
+    def test_find_space_with_size_schema_requires_dimensions_and_file_id(self) -> None:
+        function = FIND_SPACE_WITH_SIZE_TOOL["function"]
+        self.assertEqual(function["name"], "find_space_with_size")
+        self.assertEqual(
+            function["parameters"]["required"],
+            ["width", "length", "file_id"],
+        )
+        self.assertEqual(
+            set(function["parameters"]["properties"]),
+            {"width", "length", "file_id"},
         )
         self.assertFalse(function["parameters"]["additionalProperties"])
 
