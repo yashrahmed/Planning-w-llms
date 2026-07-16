@@ -20,6 +20,8 @@ from .geometry import (
     load_layout,
     max_box_task,
     maximum_slide_distance,
+    placement_free_space,
+    placement_witness,
     shortest_grid_path,
     stable_rng,
     union_polygons,
@@ -193,11 +195,12 @@ LARGEST_EMPTY_AREA_TOOL = {
     "function": {
         "name": "largest_empty_area",
         "description": (
-            "Returns the width, length, and area of the largest rectangle "
+            "Returns the width, length, and area of one maximum-area rectangle "
             "that fits fully inside the room at any rotation without overlapping "
-            "blocking objects or openings. Rugs and ceiling-only fixtures are "
-            "treated as nonblocking. Dimensions are in meters and area is in "
-            "square meters."
+            "blocking objects or openings. Its side lengths are not global limits "
+            "for rectangles with other aspect ratios. Rugs and ceiling-only "
+            "fixtures are treated as nonblocking. Dimensions are in meters and "
+            "area is in square meters."
         ),
         "parameters": {
             "type": "object",
@@ -211,6 +214,44 @@ LARGEST_EMPTY_AREA_TOOL = {
                 }
             },
             "required": ["file_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+FIND_SPACE_WITH_SIZE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "find_space_with_size",
+        "description": (
+            "Determines whether a rectangle with the specified width and length "
+            "can fit fully inside the room at any rotation without overlapping "
+            "blocking objects or openings. Returns True or False in natural "
+            "language and includes a valid center and rotation when space is "
+            "found. Dimensions are in meters."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "The rectangle width in meters.",
+                },
+                "length": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "The rectangle length in meters.",
+                },
+                "file_id": {
+                    "type": "string",
+                    "description": (
+                        "The exact JSON filename given in the question after "
+                        "'Room layout can be found in file :'."
+                    ),
+                },
+            },
+            "required": ["width", "length", "file_id"],
             "additionalProperties": False,
         },
     },
@@ -354,6 +395,7 @@ TOOLS = [
     INSPECT_ENTITY_TOOL,
     RAY_TRACE_TOOL,
     LARGEST_EMPTY_AREA_TOOL,
+    FIND_SPACE_WITH_SIZE_TOOL,
     OCCUPIED_FLOOR_AREA_TOOL,
     CALCULATOR_TOOL,
     SHORTEST_PATH_TOOL,
@@ -633,6 +675,59 @@ class FloorplanToolRuntime:
             f"{length:.3f} meters long, with an area of {area:.3f} square meters."
         )
 
+    def find_space_with_size(
+        self, width: float, length: float, file_id: str
+    ) -> str:
+        dimensions = {"width": width, "length": length}
+        normalized: dict[str, float] = {}
+        for name, value in dimensions.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be a positive finite number")
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric <= 0.0:
+                raise ValueError(f"{name} must be a positive finite number")
+            normalized[name] = numeric
+
+        context = load_layout(self.resolve_layout_file(file_id))
+        filename_parts = Path(file_id).stem.rsplit("-", 2)
+        source_group = (
+            filename_parts[0] if len(filename_parts) == 3 else context.source_group
+        )
+        context = replace(context, source_group=source_group)
+        free_space = placement_free_space(context)
+        witness = (
+            None
+            if free_space.is_empty
+            else placement_witness(
+                free_space,
+                normalized["width"],
+                normalized["length"],
+                stable_rng(
+                    0,
+                    context.source_group,
+                    context.layout_id,
+                    "find_space_with_size",
+                    normalized["width"],
+                    normalized["length"],
+                ),
+            )
+        )
+        if witness is None:
+            return (
+                f"No space was found for a rectangle {normalized['width']:.3f} "
+                f"meters wide and {normalized['length']:.3f} meters long. "
+                "The answer is False."
+            )
+
+        center_x, center_y = witness["center"]
+        rotation = float(witness["rotation_degrees"])
+        return (
+            f"A rectangle {normalized['width']:.3f} meters wide and "
+            f"{normalized['length']:.3f} meters long fits in the room. One "
+            f"valid placement is centered at x={center_x:.3f}, y={center_y:.3f} "
+            f"meters and rotated {rotation:.3f} degrees. The answer is True."
+        )
+
     def occupied_floor_area(self, file_id: str) -> str:
         context = load_layout(self.resolve_layout_file(file_id))
         occupied_polygons = [
@@ -741,6 +836,7 @@ class FloorplanToolRuntime:
             "inspect_entity": {"object_id", "file_id"},
             "ray_trace": {"object_id_1", "object_id_2", "file_id"},
             "largest_empty_area": {"file_id"},
+            "find_space_with_size": {"width", "length", "file_id"},
             "occupied_floor_area": {"file_id"},
             "calculator": {"operand_1", "operand_2", "operator"},
             "shortest_path": {"object_id_1", "object_id_2", "file_id"},
@@ -782,6 +878,10 @@ class FloorplanToolRuntime:
             )
         if name == "largest_empty_area":
             return self.largest_empty_area(arguments["file_id"])
+        if name == "find_space_with_size":
+            return self.find_space_with_size(
+                arguments["width"], arguments["length"], arguments["file_id"]
+            )
         if name == "occupied_floor_area":
             return self.occupied_floor_area(arguments["file_id"])
         if name == "calculator":

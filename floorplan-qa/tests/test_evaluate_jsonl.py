@@ -147,11 +147,16 @@ class EvaluatorTests(unittest.TestCase):
         )
         serialized_messages = json.dumps(payload["messages"])
         self.assertIn("kitchen-7-train.json", serialized_messages)
+        self.assertIn("without independently recomputing it", serialized_messages)
         self.assertNotIn("kitchen/room_7.json", serialized_messages)
         self.assertNotIn("pair_distance", serialized_messages)
         self.assertNotIn("4.000", serialized_messages)
         self.assertNotIn("object_1", serialized_messages)
-        self.assertEqual(len(payload["tools"]), 10)
+        self.assertEqual(len(payload["tools"]), 11)
+        self.assertIn(
+            "find_space_with_size",
+            [tool["function"]["name"] for tool in payload["tools"]],
+        )
         self.assertNotIn("tool_choice", payload)
 
 
