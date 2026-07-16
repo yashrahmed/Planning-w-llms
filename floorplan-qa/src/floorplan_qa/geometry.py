@@ -425,7 +425,7 @@ def rectangle_from_parameters(parameters: list[float]) -> Polygon:
     x, y, width, depth, angle = parameters
     return centered_rectangle((x, y), width, depth, angle)
 
-def optimize_maximum_rectangle(
+def optimize_maximum_rectangle_candidates(
     free_space: Any, room: Polygon
 ) -> tuple[list[float], dict[str, Any]]:
     """Run a seed-independent numerical search with exact witness validation."""
@@ -552,6 +552,222 @@ def optimize_maximum_rectangle(
         "relative_improvement_window": round(relative_improvement, 8),
         "angle_candidates": len(angles),
         "best_valid_lower_bound_m2": best_score,
+    }
+    return best, metadata
+
+
+def boundary_vertex_coordinates(geometry: Any) -> list[tuple[float, float]]:
+    """Return unique polygon-boundary vertices in stable coordinate order."""
+    vertices: set[tuple[float, float]] = set()
+    for polygon in geometry_polygons(geometry):
+        rings = [polygon.exterior, *polygon.interiors]
+        for ring in rings:
+            for x, y in list(ring.coords)[:-1]:
+                vertices.add((round(float(x), 12), round(float(y), 12)))
+    return sorted(vertices)
+
+
+def type_a_contact_candidates(free_space: Any) -> list[list[float]]:
+    """Enumerate the paper's Type-A opposite-corner square events exactly."""
+    candidates: list[list[float]] = []
+    vertices = boundary_vertex_coordinates(free_space)
+    allowed = free_space.buffer(GEOMETRY_TOLERANCE)
+    for first, second in combinations(vertices, 2):
+        dx = second[0] - first[0]
+        dy = second[1] - first[1]
+        diagonal = math.hypot(dx, dy)
+        if diagonal <= GEOMETRY_TOLERANCE:
+            continue
+        center = ((first[0] + second[0]) / 2.0, (first[1] + second[1]) / 2.0)
+        side = diagonal / math.sqrt(2.0)
+        angle = (math.atan2(dy, dx) - math.pi / 4.0) % math.pi
+        square = centered_rectangle(center, side, side, angle)
+        if allowed.covers(square):
+            candidates.append([center[0], center[1], side, side, angle])
+    return candidates
+
+
+def shrink_to_valid_rectangle(
+    free_space: Any, parameters: list[float]
+) -> list[float] | None:
+    """Convert a numerically near-feasible optimizer result to a valid witness."""
+    x, y, width, depth, angle = (float(value) for value in parameters)
+    if width <= 0.0 or depth <= 0.0 or not free_space.covers(Point(x, y)):
+        return None
+    allowed = free_space.buffer(GEOMETRY_TOLERANCE)
+    normalized = [x, y, width, depth, angle % math.pi]
+    if allowed.covers(rectangle_from_parameters(normalized)):
+        return normalized
+
+    low = 0.0
+    high = 1.0
+    for _ in range(52):
+        scale = (low + high) / 2.0
+        candidate = [x, y, width * scale, depth * scale, angle % math.pi]
+        if allowed.covers(rectangle_from_parameters(candidate)):
+            low = scale
+        else:
+            high = scale
+    if low <= GEOMETRY_TOLERANCE:
+        return None
+    return [x, y, width * low, depth * low, angle % math.pi]
+
+
+def shgo_contact_candidates(
+    free_space: Any, room: Polygon, initial_candidate: list[float]
+) -> tuple[list[list[float]], dict[str, Any]]:
+    """Find continuous contact configurations with deterministic SHGO."""
+    from scipy.optimize import minimize, shgo
+
+    min_x, min_y, max_x, max_y = room.bounds
+    cap = math.hypot(max_x - min_x, max_y - min_y)
+    minimum_side = max(cap * 1e-5, 1e-6)
+    area_tolerance = max(float(room.area), 1.0) * 1e-8
+
+    def objective(values: Any) -> float:
+        return -float(values[2] * values[3])
+
+    def containment_constraint(values: Any) -> float:
+        rectangle = centered_rectangle(
+            (float(values[0]), float(values[1])),
+            float(values[2]),
+            float(values[3]),
+            float(values[4]),
+        )
+        return area_tolerance - float(rectangle.difference(free_space).area)
+
+    bounds = [
+        (min_x, max_x),
+        (min_y, max_y),
+        (minimum_side, cap),
+        (minimum_side, cap),
+        (0.0, math.pi / 2.0),
+    ]
+    constraint = {"type": "ineq", "fun": containment_constraint}
+    result = shgo(
+        objective,
+        bounds,
+        constraints=constraint,
+        n=48,
+        iters=1,
+        sampling_method="simplicial",
+        minimizer_kwargs={"method": "SLSQP", "options": {"maxiter": 160}},
+        options={"maxev": 750, "minimize_every_iter": True},
+    )
+
+    local_start = list(initial_candidate)
+    local_start[4] %= math.pi
+    if local_start[4] >= math.pi / 2.0:
+        local_start[2], local_start[3] = local_start[3], local_start[2]
+        local_start[4] -= math.pi / 2.0
+    local_result = minimize(
+        objective,
+        local_start,
+        method="SLSQP",
+        bounds=bounds,
+        constraints=constraint,
+        options={"maxiter": 200, "ftol": 1e-12},
+    )
+
+    local_minima = getattr(result, "xl", None)
+    raw_candidates = []
+    if getattr(result, "x", None) is not None:
+        raw_candidates.append(result.x)
+    if local_minima is not None:
+        raw_candidates.extend(local_minima)
+    if getattr(local_result, "x", None) is not None:
+        raw_candidates.append(local_result.x)
+    candidates = []
+    for raw in raw_candidates:
+        candidate = shrink_to_valid_rectangle(free_space, list(raw))
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates, {
+        "success": bool(result.success or local_result.success),
+        "global_success": bool(result.success),
+        "local_refinement_success": bool(local_result.success),
+        "message": str(result.message),
+        "iterations": int(getattr(result, "nit", 0)),
+        "function_evaluations": int(getattr(result, "nfev", 0)),
+        "local_function_evaluations": int(getattr(result, "nlfev", 0)),
+        "local_minima": 0 if local_minima is None else len(local_minima),
+        "sampling_method": "simplicial",
+    }
+
+
+def rectangle_contact_summary(free_space: Any, parameters: list[float]) -> dict[str, Any]:
+    """Report active corner and side contacts for an independently valid witness."""
+    rectangle = rectangle_from_parameters(parameters)
+    boundary = free_space.boundary
+    corners = list(rectangle.exterior.coords)[:-1]
+    corner_contacts = sum(Point(corner).distance(boundary) <= 1e-5 for corner in corners)
+    side_contacts = 0
+    vertices = boundary_vertex_coordinates(free_space)
+    for first, second in pairwise(list(rectangle.exterior.coords)):
+        side = LineString([first, second])
+        for vertex in vertices:
+            point = Point(vertex)
+            is_interior_side_contact = (
+                point.distance(side) <= 1e-5
+                and point.distance(Point(first)) > 1e-5
+                and point.distance(Point(second)) > 1e-5
+            )
+            if is_interior_side_contact:
+                side_contacts += 1
+                break
+    return {
+        "corner_contacts": corner_contacts,
+        "side_contacts": side_contacts,
+    }
+
+
+def optimize_maximum_rectangle(
+    free_space: Any, room: Polygon
+) -> tuple[list[float], dict[str, Any]]:
+    """Combine explicit contact events with deterministic continuous optimization."""
+    baseline, baseline_metadata = optimize_maximum_rectangle_candidates(
+        free_space, room
+    )
+    type_a = type_a_contact_candidates(free_space)
+    continuous, shgo_metadata = shgo_contact_candidates(free_space, room, baseline)
+    labeled_candidates = [
+        ("baseline", baseline),
+        *(("type_a_contact_event", candidate) for candidate in type_a),
+        *(("continuous_contact_optimization", candidate) for candidate in continuous),
+    ]
+    valid_candidates = [
+        (source, candidate)
+        for source, candidate in labeled_candidates
+        if candidate[2] > 0.0
+        and candidate[3] > 0.0
+        and free_space.buffer(GEOMETRY_TOLERANCE).covers(
+            rectangle_from_parameters(candidate)
+        )
+    ]
+    best_source, best = max(
+        valid_candidates,
+        key=lambda item: item[1][2] * item[1][3],
+        default=("baseline", baseline),
+    )
+    best_area = float(best[2] * best[3])
+    baseline_area = float(baseline[2] * baseline[3])
+    metadata = {
+        "algorithm": "contact_event_shgo",
+        "exact_contact_types_enumerated": ["A"],
+        "continuous_contact_types_optimized": ["B", "C", "D", "E", "F"],
+        "best_source": best_source,
+        "type_a_candidates": len(type_a),
+        "continuous_candidates": len(continuous),
+        "baseline_valid_lower_bound_m2": baseline_area,
+        "best_valid_lower_bound_m2": best_area,
+        "improvement_over_baseline_m2": best_area - baseline_area,
+        "converged": bool(shgo_metadata["success"]),
+        "global_optimum_certified": False,
+        "relative_tolerance": MAX_BOX_RELATIVE_TOLERANCE,
+        "relative_improvement_window": 0.0 if shgo_metadata["success"] else math.inf,
+        "contacts": rectangle_contact_summary(free_space, best),
+        "shgo": shgo_metadata,
+        "baseline": baseline_metadata,
     }
     return best, metadata
 

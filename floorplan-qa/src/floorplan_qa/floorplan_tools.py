@@ -196,11 +196,12 @@ LARGEST_EMPTY_AREA_TOOL = {
         "name": "largest_empty_area",
         "description": (
             "Returns the width, length, and area of the best valid rectangle "
-            "found by a deterministic any-rotation search. The returned witness "
-            "fits fully inside the room without overlapping blocking objects or "
-            "openings. Its side lengths are not global limits for rectangles with "
-            "other aspect ratios. Rugs and ceiling-only fixtures are treated as "
-            "nonblocking. Dimensions are in meters and area is in square meters."
+            "found by a deterministic contact-event and continuous any-rotation "
+            "search. The returned witness fits fully inside the room without "
+            "overlapping blocking objects or openings. Its side lengths are not "
+            "global limits for rectangles with other aspect ratios. Rugs and "
+            "ceiling-only fixtures are treated as nonblocking. Dimensions are in "
+            "meters and area is in square meters."
         ),
         "parameters": {
             "type": "object",

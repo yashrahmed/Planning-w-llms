@@ -180,23 +180,27 @@ samples and therefore underestimate the reference answer.
 
 The exact target is the contact-event algorithm in
 [Maximum-Area Rectangles in a Simple Polygon](https://arxiv.org/abs/1910.08686),
-which handles arbitrary orientations and polygonal domains with holes. Until
-that algorithm is implemented, use a seed-independent numerical pipeline:
+which handles arbitrary orientations and polygonal domains with holes. The
+current implementation uses the following deterministic hybrid:
 
-1. Parameterize a rectangle by center, width, height, and rotation.
-2. Seed the search with connected-component representatives, polygon
+1. Enumerate Type-A contact events by treating every pair of boundary vertices
+   as opposite corners of a square and retaining only fully contained squares.
+2. Parameterize remaining rectangles by center, width, height, and rotation.
+3. Seed the search with connected-component representatives, polygon
    triangulation representatives, and a fixed Halton sequence.
-3. Use exact Shapely containment and collision checks as hard feasibility
+4. Use SciPy SHGO with the rectangle's outside area as a nonlinear feasibility
+   constraint to search continuous Type B-F contact configurations.
+5. Use exact Shapely containment and collision checks as hard feasibility
    tests for every proposed candidate.
-4. Locally refine the best valid candidates and adaptively subdivide promising
-   position and rotation ranges.
-5. Stop at a documented convergence tolerance and record the best valid lower
+6. Stop at a documented convergence tolerance and record the best valid lower
    bound, tolerance, iteration count, and convergence status. A layout or
    generation seed must never affect the search.
 
 The result is still a numerical lower bound rather than a symbolic proof of the
-global maximum, so the tool description and provenance must not claim greater
-precision than the solver's convergence tolerance.
+global maximum because the full Type B-F staircase and ray-shooting event map
+has not been ported. The tool description and provenance therefore record
+`global_optimum_certified: false` and must not claim greater precision than the
+solver's convergence tolerance.
 
 ### Placement
 

@@ -43,7 +43,7 @@ DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "datasets" / "train-qa"
 OUTPUT_FILENAME = "questions.jsonl"
 GENERATION_REPORT_FILENAME = "generation-report.json"
 DATASET_SPLITS = ("train", "test", "val")
-SOLVER_VERSION = "paper-v4-seed-independent-geometry"
+SOLVER_VERSION = "paper-v5-contact-event-shgo"
 TASKS = (
     "pair_distance",
     "free_space",

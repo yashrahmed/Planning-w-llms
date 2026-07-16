@@ -71,12 +71,12 @@ independently checkable from the emitted question.
 
 Each record includes task parameters, a typed reference answer, fixed-template
 prompt messages, input-validation results, solver settings, convergence data,
-and version provenance. The `paper-v4-seed-independent-geometry`
+and version provenance. The `paper-v5-contact-event-shgo`
 implementation uses continuous first-collision repositioning, seed-independent
 configuration-space placement with exact witnesses or area-certified
-negatives, deterministic numerical Max Box search, and 0.15 m-clearance grid
-A* for shortest paths. Visibility intentionally uses actual polygon
-intersections rather than paper-style bounding boxes.
+negatives, contact-event plus deterministic SHGO Max Box search, and 0.15
+m-clearance grid A* for shortest paths. Visibility intentionally uses actual
+polygon intersections rather than paper-style bounding boxes.
 
 ## Evaluate generation quality
 
@@ -503,9 +503,31 @@ from the same deterministic geometry candidates, and its population mutation
 and refinement schedule is fixed. On `kitchen-253`, generation seeds 0, 7, and
 99 all produced the identical 4.6513739646 square-meter witness. This removes
 the generator/tool seed-alignment problem, but the result remains a valid
-numerical lower bound rather than a proof of the global maximum. The exact
-target is the arbitrary-orientation contact-event algorithm described in
+numerical lower bound rather than a proof of the global maximum.
+
+The Max Box follow-up implements the paper's exact Type-A contact event: every
+pair of polygon-boundary vertices is tested as the opposite corners of a
+square, and every resulting square is independently checked against the full
+free-space polygon, including holes. For the remaining Type B-F continuous
+contact configurations, the solver uses SciPy's deterministic simplicial
+homology global optimizer (SHGO) over center, width, length, and rotation, with
+rectangle-outside-free-space area as a nonlinear constraint. Every optimizer
+result is shrunk if necessary and then independently checked by Shapely before
+it can become the answer. The previous deterministic candidate-refinement
+solver remains a valid lower-bound fallback and a feasible starting point for
+local contact refinement.
+
+No available library implements the complete arbitrary-orientation six-type
+event map from
 [Maximum-Area Rectangles in a Simple Polygon](https://arxiv.org/abs/1910.08686).
+CGAL supports convex inscribed k-gons and axis-aligned empty rectangles;
+`largestinteriorrectangle` is an axis-aligned binary-grid routine; and PyAEDT's
+arbitrary-orientation implementation uses a finite quasi-lattice. Consequently,
+the current hybrid explicitly marks `global_optimum_certified: false`: it
+implements exact Type A events and deterministic continuous optimization for
+Types B-F, but not the paper's full staircase/ray-shooting event data
+structures.
+
 The exact target for fixed-aspect placement is the largest-similar-polygon
 algorithm described in
 [Largest similar copies of convex polygons amidst polygonal obstacles](https://arxiv.org/abs/2012.06978).
@@ -519,6 +541,18 @@ contain a degenerate `mirror` polygon; this is an input-data validation issue,
 not a geometry-seed failure. Directly replaying the generated visible arguments
 through the agent runtime matched all 20/20 Placement answers and all 20/20
 rounded Max Box answers.
+
+On the same 20-layout seed-7 sample, the contact-event/SHGO solver changed 9 of
+20 Max Box references while retaining valid witnesses for all 20. Seven changes
+were larger than 2%; the largest improvements were HSSD 34 (+79.3%), HSSD 88
+(+73.0%), kitchen 523 (+32.8%), living room 117 (+12.9%), living room 146
+(+127.9%), bedroom 207 (+4.6%), and HSSD 106 (+5.3%). SHGO found a global
+minimizer pool directly on 19 layouts; bedroom 390 had a narrow feasible set,
+so its already-valid baseline witness was locally refined instead. Generation
+plus all quality checks completed in about 23 seconds. Every gate passed at
+100% except the pre-existing complete-layout-yield gate caused by the two
+degenerate `mirror` polygons. Repeating the complete generation produced a
+byte-identical JSONL file and a 100% deterministic-match score.
 
 Both model backends accept a QA JSONL path, remove reference/assistant messages
 from each record, run one example at a time, print a per-example verdict, and
