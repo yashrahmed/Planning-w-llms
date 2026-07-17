@@ -169,7 +169,7 @@ The model-facing tool set contains eleven focused operations:
 | `ray_trace(object_id_1, object_id_2, file_id)` | Traces the finite centroid-to-centroid segment and returns every other intersected entity ID in traversal order. Object, door, and window IDs are accepted. |
 | `largest_empty_area(file_id)` | Returns the width, length, and area of one maximum-area rectangle that fits inside the room at any rotation. Its side lengths are not global limits for other aspect ratios. |
 | `find_space_with_size(width, length, file_id)` | Returns whether the requested rectangle fits anywhere in the room at any evaluated rotation and includes a valid center and rotation when it does. |
-| `occupied_floor_area(file_id)` | Returns the unioned area of occupied object polygons. Rugs count as occupied, while openings and ceiling-only fixtures do not. |
+| `occupied_floor_area(file_id)` | Returns the unioned area of occupied object polygons; it correctly excluded. |
 | `calculator(operand_1, operand_2, operator)` | Applies `add`, `sub`, `mul`, or `div` and returns a result rounded to three decimals. Division by zero returns `Error`. |
 | `shortest_path(object_id_1, object_id_2, file_id)` | Returns an ordered shortest centroid-to-centroid waypoint path while maintaining the benchmark's fixed 0.15 m clearance from other blocking entities. |
 | `test_movement(object_id, direction, file_id)` | Returns the maximum distance an object can translate up, down, left, or right before first contact with a blocking object or the room boundary. |

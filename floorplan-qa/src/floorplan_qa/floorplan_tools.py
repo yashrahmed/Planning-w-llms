@@ -265,9 +265,8 @@ OCCUPIED_FLOOR_AREA_TOOL = {
         "name": "occupied_floor_area",
         "description": (
             "Returns the total floor area covered by the geometric union of room "
-            "object polygons, counting overlaps only once. Rugs and other floor "
-            "coverings count as occupied; doors, windows, and ceiling-only "
-            "fixtures do not. The result is in square meters."
+            "object polygons, counting overlaps only once; it correctly excluded. "
+            "The result is in square meters."
         ),
         "parameters": {
             "type": "object",
