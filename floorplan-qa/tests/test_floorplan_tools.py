@@ -311,10 +311,7 @@ class FloorplanToolTests(unittest.TestCase):
 
         self.assertEqual(
             self.runtime.execute("occupied_floor_area", {"file_id": file_id}),
-            (
-                "The occupied floor area is 7.000 square meters "
-                "(28.000% of total area)."
-            ),
+            "The occupied floor area is 7.000 square meters.",
         )
 
     def test_calculator_supports_all_operations_and_zero_division(self) -> None:
@@ -454,8 +451,6 @@ class FloorplanToolTests(unittest.TestCase):
     def test_occupied_floor_area_schema_requires_only_file_id(self) -> None:
         function = OCCUPIED_FLOOR_AREA_TOOL["function"]
         self.assertEqual(function["name"], "occupied_floor_area")
-        self.assertIn("it correctly excluded", function["description"])
-        self.assertNotIn("Rugs and other floor coverings", function["description"])
         self.assertEqual(function["parameters"]["required"], ["file_id"])
         self.assertEqual(
             set(function["parameters"]["properties"]),

@@ -169,7 +169,7 @@ The model-facing tool set contains eleven focused operations:
 | `ray_trace(object_id_1, object_id_2, file_id)` | Traces the finite centroid-to-centroid segment and returns every other intersected entity ID in traversal order. Object, door, and window IDs are accepted. |
 | `largest_empty_area(file_id)` | Returns the width, length, and area of one maximum-area rectangle that fits inside the room at any rotation. Its side lengths are not global limits for other aspect ratios. |
 | `find_space_with_size(width, length, file_id)` | Returns whether the requested rectangle fits anywhere in the room at any evaluated rotation and includes a valid center and rotation when it does. |
-| `occupied_floor_area(file_id)` | Returns the unioned area of occupied object polygons and its percentage of total room area; it correctly excluded. |
+| `occupied_floor_area(file_id)` | Returns the unioned area of occupied object polygons. Rugs count as occupied, while openings and ceiling-only fixtures do not. |
 | `calculator(operand_1, operand_2, operator)` | Applies `add`, `sub`, `mul`, or `div` and returns a result rounded to three decimals. Division by zero returns `Error`. |
 | `shortest_path(object_id_1, object_id_2, file_id)` | Returns an ordered shortest centroid-to-centroid waypoint path while maintaining the benchmark's fixed 0.15 m clearance from other blocking entities. |
 | `test_movement(object_id, direction, file_id)` | Returns the maximum distance an object can translate up, down, left, or right before first contact with a blocking object or the room boundary. |
@@ -816,66 +816,6 @@ kept separate from a future explicit prompt rule that non-occupied floor area
 equals total room area from `inspect_room` minus occupied area from
 `occupied_floor_area`. The complete replay is ignored at
 `datasets/evaluations/qwen3.5-4b-other-nine-failures-after-repeat-prompt.json`.
-
-#### Occupied-percentage response experiment
-
-The `occupied_floor_area` runtime response was changed from:
-
-```text
-The occupied floor area is 9.710 square meters.
-```
-
-to:
-
-```text
-The occupied floor area is 9.710 square meters (53.235% of total area).
-```
-
-The percentage uses the unrounded occupied and room-polygon areas and is
-reported to three decimal places. A controlled before/after replay contained
-the nine original 300-run failures plus five controls sampled with
-`random.Random(0)` from the 28 Free Space records that were correct in that run:
-`free-space-bedroom-305`, `free-space-bedroom-196`,
-`free-space-bedroom-354`, `free-space-kitchen-356`, and
-`free-space-bedroom-123`. Both 14-question runs used the same current system
-prompt, shortened `occupied_floor_area` tool description, question order, model,
-seed, temperature, thinking setting, turn limit, retry count, and token budget.
-The runtime response was the only experimental change.
-
-| Metric | Area only | Area plus percentage |
-|---|---:|---:|
-| Overall correct | 10/14 | **10/14** |
-| Original-failure subset | 7/9 | **7/9** |
-| Control subset | 3/5 | **3/5** |
-| Formatting failures | 4 | 4 |
-| Runtime | 410.507 s | 438.910 s |
-| Generated tokens | 9,336 | 9,639 |
-| Model calls | 73 | 72 |
-| Tool calls | 63 | 62 |
-
-The percentage caused no scored improvement or regression. Correctness was
-identical on every record, and the ordered tool sequence was identical on 13 of
-14. On `free-space-living_room-352`, the model dropped one redundant calculator
-call and remained correct. On `free-space-kitchen-413`, it added one correct
-calculator call but then continued with five irrelevant entity inspections and
-remained incorrect.
-
-The experiment also exposed a separate tool-selection effect that was already
-present in the area-only baseline. Controls `free-space-bedroom-123` and
-`free-space-bedroom-196`, plus former failure `free-space-hssd-101`, never
-called `occupied_floor_area`; each called `inspect_room` followed by seven
-`inspect_entity` calls and exhausted the turn limit. The percentage cannot
-affect those traces because it is visible only after the tool is selected.
-Between the preceding nine-question replay and this baseline, the relevant
-model-input change was shortening the tool description from explicit
-inclusion/exclusion semantics to the opaque phrase `it correctly excluded`.
-That removed the terms matching the Free Space question and is therefore the
-cause supported by the controlled evidence for the changed routing.
-
-The ignored reports are
-`datasets/evaluations/qwen3.5-4b-free-space-14-before-occupied-percent.json`
-and
-`datasets/evaluations/qwen3.5-4b-free-space-14-after-occupied-percent.json`.
 
 A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
 exact 10/10 Placement balance, and passed schema, prompt, reproducibility,
