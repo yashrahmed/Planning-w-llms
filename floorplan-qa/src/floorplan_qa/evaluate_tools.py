@@ -30,9 +30,12 @@ SYSTEM_PROMPT = (
     "in the question to any tool that requires it. Choose tool names and arguments "
     "only from the user-visible question and tool schemas. Do not invent tool "
     "results. When a tool directly returns the quantity requested by the question, "
-    "use that result as the final answer without independently recomputing it, "
-    "unless the tool reports an error. End with the exact final-answer format "
-    "requested by the user."
+    "and the tool does not report an error, your next response must be the final "
+    "answer. Do not call another tool to verify, recompute, reformat, or inspect "
+    "that result. Never repeat a tool call with the same arguments. In particular, "
+    "do not use the calculator on coordinates, paths, entity lists, distances, "
+    "angles, or Boolean values already returned by another tool. End with the "
+    "exact final-answer format requested by the user."
 )
 
 AGENT_DATA_BOUNDARY = {
