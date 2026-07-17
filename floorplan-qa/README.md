@@ -182,9 +182,13 @@ tools whenever they provide relevant geometric evidence. The room layout is not
 embedded in the prompt: pass the exact file identifier written in the question
 to any tool that requires it. Choose tool names and arguments only from the
 user-visible question and tool schemas. Do not invent tool results. When a tool
-directly returns the quantity requested by the question, use that result as the
-final answer without independently recomputing it, unless the tool reports an
-error. End with the exact final-answer format requested by the user.
+directly returns the quantity requested by the question, and the tool does not
+report an error, your next response must be the final answer. Do not call
+another tool to verify, recompute, reformat, or inspect that result. Never
+repeat a tool call with the same arguments. In particular, do not use the
+calculator on coordinates, paths, entity lists, distances, angles, or Boolean
+values already returned by another tool. End with the exact final-answer format
+requested by the user.
 ```
 
 For example, its output has this form:
@@ -735,6 +739,83 @@ The failures suggest three targeted changes:
 
 The complete report remains ignored at
 `datasets/evaluations/qwen3.5-4b-cgal-seed-0-300.json`.
+
+#### Repeated-tool-call prompt tuning
+
+The Visibility and Shortest Path formatting failures were replayed before and
+after strengthening the generic agent prompt. Both evaluations selected the
+same two question IDs from the same JSONL and used Ollama `qwen3.5:4b`, seed 0,
+temperature 0, thinking disabled, eight turns, five retries, and a
+2,500-generated-token budget per question. The only experimental change was the
+system prompt.
+
+The original prompt already told the model to accept a direct tool result, but
+the deterministic baseline reproduced both failures and their original tool
+sequences. The tuned prompt requires the next response after a successful,
+direct tool result to be the final answer; it also prohibits verification or
+recomputation calls, repeated calls with identical arguments, and calculator
+calls on values already supplied by another tool.
+
+| Metric | Before | After |
+|---|---:|---:|
+| Correct | 0/2 | **2/2** |
+| Formatting failures | 2 | **0** |
+| Runtime | 122.111 s | **38.930 s** |
+| Generated tokens | 3,114 | **1,080** |
+| Model calls | 16 | **7** |
+| Tool calls | 16 | **4** |
+
+For `visibility-kitchen-141`, the baseline called `ray_trace` once and then
+`calculator` seven times. After tuning it called `ray_trace`, made one remaining
+unnecessary `calculator` call, and returned the correctly tagged
+`["chair_1"]`. For `shortest-path-kitchen-551`, the baseline called
+`inspect_room`, `shortest_path`, and then `calculator` six times. After tuning
+it called only `inspect_room` and `shortest_path` before returning the correctly
+tagged waypoint list. Thus the repeated-call loops and both scoring failures
+were eliminated, although the Visibility trace shows that prompt instructions
+alone did not completely eliminate irrelevant one-off tool use.
+
+The ignored before and after reports are
+`datasets/evaluations/qwen3.5-4b-two-repeat-failures-before-prompt.json` and
+`datasets/evaluations/qwen3.5-4b-two-repeat-failures-after-prompt.json`.
+
+As a sanity check, the other nine failures from the 300-question run were then
+evaluated with the tuned prompt and compared with their original results:
+
+| Metric | Original 300-run traces | Tuned-prompt replay |
+|---|---:|---:|
+| Correct | 0/9 | **4/9** |
+| Formatting failures | 2 | **0** |
+| Runtime | 207.669 s | 200.294 s |
+| Generated tokens | 6,185 | 5,216 |
+| Model calls | 32 | 35 |
+| Tool calls | 24 | 26 |
+
+The prompt fixed `free-space-bedroom-135`, `free-space-kitchen-512`,
+`free-space-hssd-101`, and `free-space-hssd-41`. In particular,
+`free-space-hssd-101` replaced its irrelevant `largest_empty_area` call with
+`inspect_room`, `occupied_floor_area`, and `calculator`, then returned the
+correct subtraction.
+
+Five Free Space questions remained incorrect. Four preserved the original
+semantic error: the model treated `occupied_floor_area` as if it directly
+returned non-occupied area and skipped subtraction. For
+`free-space-kitchen-413`, the original model repeatedly obtained the correct
+calculator result but never finalized; after tuning it stopped repeating calls
+and produced a correctly formatted answer, but prematurely returned the
+occupied area instead. This changed the failure from formatting to semantics
+without changing its score.
+
+The sanity check therefore found no new scored regression among these nine
+already-failing questions and improved four of them, but it exposed an
+interaction between the new finalization rule and the model's existing
+Free Space misconception. When the model incorrectly classifies
+`occupied_floor_area` as a direct answer, stronger finalization instructions
+make it commit to that wrong value sooner. The generic no-repeat rule should be
+kept separate from a future explicit prompt rule that non-occupied floor area
+equals total room area from `inspect_room` minus occupied area from
+`occupied_floor_area`. The complete replay is ignored at
+`datasets/evaluations/qwen3.5-4b-other-nine-failures-after-repeat-prompt.json`.
 
 A fresh 20-layout, seed-7 generation emitted all 160 task records, retained the
 exact 10/10 Placement balance, and passed schema, prompt, reproducibility,

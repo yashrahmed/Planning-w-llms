@@ -147,7 +147,12 @@ class EvaluatorTests(unittest.TestCase):
         )
         serialized_messages = json.dumps(payload["messages"])
         self.assertIn("kitchen-7-train.json", serialized_messages)
-        self.assertIn("without independently recomputing it", serialized_messages)
+        self.assertIn(
+            "your next response must be the final answer", serialized_messages
+        )
+        self.assertIn(
+            "Never repeat a tool call with the same arguments", serialized_messages
+        )
         self.assertNotIn("kitchen/room_7.json", serialized_messages)
         self.assertNotIn("pair_distance", serialized_messages)
         self.assertNotIn("4.000", serialized_messages)
