@@ -311,7 +311,10 @@ class FloorplanToolTests(unittest.TestCase):
 
         self.assertEqual(
             self.runtime.execute("occupied_floor_area", {"file_id": file_id}),
-            "The occupied floor area is 7.000 square meters.",
+            (
+                "The occupied floor area is 7.000 square meters "
+                "(28.000% of total area)."
+            ),
         )
 
     def test_calculator_supports_all_operations_and_zero_division(self) -> None:

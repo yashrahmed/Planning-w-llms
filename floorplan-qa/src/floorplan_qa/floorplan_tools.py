@@ -735,7 +735,14 @@ class FloorplanToolRuntime:
             if occupied_union is None
             else float(context.room.intersection(occupied_union).area)
         )
-        return f"The occupied floor area is {occupied_area:.3f} square meters."
+        room_area = float(context.room.area)
+        occupied_percentage = (
+            0.0 if room_area <= 0.0 else 100.0 * occupied_area / room_area
+        )
+        return (
+            f"The occupied floor area is {occupied_area:.3f} square meters "
+            f"({occupied_percentage:.3f}% of total area)."
+        )
 
     @staticmethod
     def calculator(operand_1: float, operand_2: float, operator: str) -> str:
