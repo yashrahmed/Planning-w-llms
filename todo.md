@@ -12,3 +12,4 @@ TBD - Narrow down the choice of datasets.
 
 ### Version 2
 - [ ] Targeted Hierarchical planning.
+- [ ] Beat the SOTA on [DeepPlanning](https://huggingface.co/datasets/Qwen/DeepPlanning).
