@@ -1,7 +1,6 @@
 ## Goal - [Career - How agent models/datasets are built] - Planning with LLMs.
 
 Design an agent harness + fine tune a model for that harness to beat or match some of the benchmarks below.
-TBD - Narrow down the choice of datasets.
 
 ### Version 1
 - [x] Build a harness for a model to beat [FloorplanQA].
