@@ -12,4 +12,6 @@ Design an agent harness + fine tune a model for that harness to beat or match so
 - [ ] Learn about building [reasoning LLMs](https://www.manning.com/books/build-a-reasoning-model-from-scratch).
 - [ ] Beat the SOTA on [DeepPlanning](https://huggingface.co/datasets/Qwen/DeepPlanning).
   - [ ] Try frame based Hierarchical planning.
+- [ ] Learn about Agentic vision and VJEPA, LeJEPA, VLAs and World models.
+
 
