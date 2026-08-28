@@ -29,6 +29,10 @@ class State:
         return left_bank_is_safe and right_bank_is_safe
 
     @property
+    def fluent(self) -> Fluent:
+        return Fluent(self.ref_key, BoolType())
+
+    @property
     def ref_key(self) -> str:
         boat_bank = "left" if self.boat_on_left else "right"
         return f"at_p{self.priests_left}_c{self.cannibals_left}_{boat_bank}"
@@ -49,9 +53,8 @@ def define_safe_states(n: int) -> tuple[Problem, dict[State, Fluent]]:
                 if not state.is_safe(n):
                     continue
 
-                state_fluent = Fluent(state.ref_key, BoolType())
-                problem.add_fluent(state_fluent, default_initial_value=False)
-                states[state] = state_fluent
+                problem.add_fluent(state.fluent, default_initial_value=False)
+                states[state] = state.fluent
 
     initial_state = states[State(n, n, True)]
     problem.set_initial_value(initial_state, True)
