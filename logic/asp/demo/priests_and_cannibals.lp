@@ -1,59 +1,55 @@
 #const n = 3.
-#const h = 11.
+#const h = 110.
 
 count(0..n).
-side(left; right).
+boat_side(boat_left; boat_right).
 step(0..h-1).
 
-% A bank with no priests is safe regardless of its cannibal count.
-bank_safe(0, C) :-
-    count(C).
-
-% Otherwise, the priests must not be outnumbered by cannibals.
-bank_safe(P, C) :-
-    count(P),
-    count(C),
-    P > 0,
-    P >= C.
 
 % PL and CL are the priest and cannibal counts on the left bank.
-% The right-bank counts are inferred from the total population n.
+% The boat_right-bank counts are inferred from the total population n.
 safe(PL, CL) :-
     count(PL),
     count(CL),
     PR = n - PL,
     CR = n - CL,
-    bank_safe(PL, CL),
-    bank_safe(PR, CR).
+
+    count(PL),
+    count(CL),
+    PL >= CL : PL > 0;
+
+    count(PR),
+    count(CR),
+    PR >= CR : PR > 0.
 
 % Everyone and the boat begin on the left bank.
-at(n, n, left, 0).
+state(n, n, left, 0).
 
-% When the boat is on the left, choose exactly one safe next state on the right.
+% When the boat is on the left, choose exactly one safe next state on the boat_right.
 1 {
-    at(PL2, CL2, right, T + 1) :
+    state(PL2, CL2, boat_right, T + 1) :
         safe(PL2, CL2),
         PL2 <= PL,
         CL2 <= CL,
         (PL - PL2) + (CL - CL2) >= 1,
         (PL - PL2) + (CL - CL2) <= 2
 } 1 :-
-    at(PL, CL, left, T),
+    state(PL, CL, left, T),
     step(T).
 
-% When the boat is on the right, choose exactly one safe next state on the left.
+% When the boat is on the boat_right, choose exactly one safe next state on the left.
 1 {
-    at(PL2, CL2, left, T + 1) :
+    state(PL2, CL2, left, T + 1) : % ':' read as 'such that'
         safe(PL2, CL2),
         PL2 >= PL,
         CL2 >= CL,
         (PL2 - PL) + (CL2 - CL) >= 1,
         (PL2 - PL) + (CL2 - CL) <= 2
 } 1 :-
-    at(PL, CL, right, T),
+    state(PL, CL, boat_right, T),
     step(T).
 
-% At the selected horizon, everyone and the boat must be on the right bank.
-:- not at(0, 0, right, h).
+% At the selected horizon, everyone and the boat must be on the boat_right bank.
+:- not state(0, 0, boat_right, h).
 
-#show at/4.
+#show state/4.
