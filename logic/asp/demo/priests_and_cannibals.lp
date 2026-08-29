@@ -23,7 +23,7 @@ safe(PL, CL) :-
     PR >= CR : PR > 0.
 
 % Everyone and the boat begin on the left bank.
-state(n, n, left, 0).
+state(n, n, boat_left, 0).
 
 % When the boat is on the left, choose exactly one safe next state on the boat_right.
 1 {
@@ -34,12 +34,12 @@ state(n, n, left, 0).
         (PL - PL2) + (CL - CL2) >= 1,
         (PL - PL2) + (CL - CL2) <= 2
 } 1 :-
-    state(PL, CL, left, T),
+    state(PL, CL, boat_left, T),
     step(T).
 
 % When the boat is on the boat_right, choose exactly one safe next state on the left.
 1 {
-    state(PL2, CL2, left, T + 1) : % ':' read as 'such that'
+    state(PL2, CL2, boat_left, T + 1) : % ':' read as 'such that'
         safe(PL2, CL2),
         PL2 >= PL,
         CL2 >= CL,
